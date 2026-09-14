@@ -1,0 +1,69 @@
+[project]
+name = "tinylab"
+version = "0.1.0"
+description = "The second host application in the llmllab family: prepare data, train, chat, bench -- all tasks from one JSON job file."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "benchcore[bundle]",
+    "datacore[torch,parquet]",
+    "modelcore[fa3]",
+    "tiktoken>=0.11.0",
+    "torch==2.9.1",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "setuptools>=65.0.0",
+    "torch==2.9.1",
+]
+gpu = [
+    "torch==2.9.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+# tinylab is a virtual uv project (never built/installed, like nanochat) -- this is what puts the
+# repo root on sys.path so `import tinylab` resolves under `pytest`, matching what `python -m
+# tinylab` already gets for free from -m's own CWD insertion.
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# target torch to cuda 12.8 or CPU -- same pattern nanochat uses
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu128", extra = "gpu" },
+]
+modelcore = { git = "https://github.com/8kb/modelcore", tag = "v0.3.0" }
+datacore = { git = "https://github.com/8kb/datacore", tag = "v0.2.1" }
+benchcore = { git = "https://github.com/8kb/benchcore", tag = "v0.1.1" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+default-groups = []
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "gpu" },
+    ],
+]

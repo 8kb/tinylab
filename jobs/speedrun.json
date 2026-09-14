@@ -1,0 +1,20 @@
+{
+  "_comment": "A real-scale job, not run on this laptop (no CUDA) -- see AGENTS.md. Launch on a multi-GPU pod with `torchrun --nproc_per_node=N -m tinylab jobs/speedrun.json`.",
+  "defaults": {
+    "device": "auto",
+    "sequence_len": 2048,
+    "model": { "preset": "gpt", "depth": 20 }
+  },
+  "steps": [
+    { "name": "data", "op": "prepare", "kind": "base", "shards": 240,
+      "_note": "a production-scale slice of ClimbMix; 'pre' below decides how many of these tokens it actually trains on" },
+    { "name": "pre", "op": "train", "kind": "base", "target_param_data_ratio": 12,
+      "device_batch_size": 32, "eval_every": 250, "eval_tokens": 41943040,
+      "_note": "eval_tokens = 80 * 524288, matching nanochat's own base_train.py default" },
+    { "name": "sftdata", "op": "prepare", "kind": "sft" },
+    { "name": "sft", "op": "train", "kind": "sft", "source_tag": "pre", "device_batch_size": 32, "eval_every": 200 },
+    { "name": "core", "op": "bench", "suite": "core", "source": "sft", "model_tag": "sft" },
+    { "name": "chat_suite", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "sft" }
+  ],
+  "chat": { "source": "sft", "model_tag": "sft" }
+}
