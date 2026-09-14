@@ -1,15 +1,11 @@
 """
 Architecture presets + depth-dial derivation, ported and merged from nanochat's
-nanochat/architectures/presets.py and derive.py (llmllab/nanochat). expand(name, depth, **kwargs)
-turns a depth dial into a concrete modelcore.ModelConfig tree -- modelcore's own invariant is that
-a config tree carries only concrete already-decided values, never a derivation rule; these rules
-(mup_dims, compute_window_sizes, gpt_lambda_schedule) are what turns "depth 6" into per-layer ints,
-and this is the one place in tinylab that knows them.
-
-Trimmed relative to nanochat's version: only the "gpt" preset is kept (nanochat's "llama"/
-"llama_kvshare"/"llama_kvshare_win" variants and their cross-layer KV-sharing math are dropped --
-tinylab is the minimal host, not the architecture playground). No legacy-checkpoint migration
-either (tinylab has no pre-modelcore checkpoints to read).
+nanochat/architectures/presets.py and derive.py. expand(name, depth, **kwargs) turns a depth dial
+into a concrete modelcore.ModelConfig tree -- modelcore's own invariant is that a config tree
+carries only concrete already-decided values, never a derivation rule; these rules (mup_dims,
+compute_window_sizes, gpt_lambda_schedule) are what turns "depth 6" into per-layer ints, and this
+is the one place in tinylab that knows them. Only the "gpt" preset is kept -- see
+docs/architecture.md for what else tinylab drops relative to nanochat.
 """
 from modelcore import ComponentSpec, ModelConfig
 

@@ -1,13 +1,12 @@
 """
 `python -m tinylab chat <job.json>` -- interactive chat, driven by a job file's sibling "chat"
 block rather than its own flags (the same file that trained the model already names its base dir,
-checkpoint source and tag). This is deliberately a separate command, not a job op: an op runs to
-completion unattended as part of a pipeline, and a REPL blocks on a human at a prompt -- see
-AGENTS.md.
+checkpoint source and tag). Deliberately a separate command, not a job op -- see AGENTS.md. See
+docs/job-file.md's "chat" table for every key this module reads.
 
-Conversation rendering follows nanochat's scripts/chat_cli.py convention (llmllab/nanochat),
-driving the same tinylab.engine.Engine the `bench` op hands to benchcore as its Generator, so the
-interactive path and the scored path exercise identical decoding code.
+Conversation rendering follows nanochat's scripts/chat_cli.py convention, driving the same
+tinylab.engine.Engine the `bench` op hands to benchcore as its Generator, so the interactive path
+and the scored path exercise identical decoding code.
 """
 from tinylab import checkpoints, job
 from tinylab.engine import Engine
@@ -18,6 +17,8 @@ ACCEPTED_KEYS = {"source", "model_tag", "model_step", "temperature", "top_k", "m
 
 
 def main(job_path: str):
+    """Loads job_path, resolves its "chat" block (defaults deep-merged in), and either runs one
+    turn (if the block has a "prompt" key) or an interactive REPL until Ctrl-D / an empty line."""
     j = job.load(job_path)
     cfg = job.resolve_chat(j)
     job.check_known_keys(cfg, ACCEPTED_KEYS | COMMON_KEYS, where="\"chat\"")
@@ -38,6 +39,8 @@ def main(job_path: str):
     assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
 
     def _one_turn(conversation_tokens, user_input):
+        """Appends one user/assistant exchange to conversation_tokens (a list[int], mutated and
+        returned), printing the assistant's reply incrementally as it's generated."""
         conversation_tokens.append(user_start)
         conversation_tokens.extend(tokenizer.encode(user_input))
         conversation_tokens.append(user_end)

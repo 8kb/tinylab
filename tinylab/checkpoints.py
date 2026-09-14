@@ -1,15 +1,8 @@
 """
-Checkpoint naming policy: which directory, which step, which tag, plus meta.json's extra fields
-(step, val_bpb, tokenizer_fingerprint, model_config, user_config, device_batch_size, max_seq_len,
-total_batch_size, dataloader_state_dict, total_training_time -- see tinylab/ops/train.py, which
-writes them). Ported and trimmed from nanochat's nanochat/checkpoint_manager.py (llmllab/nanochat)
--- the actual model/optimizer artifact format belongs to modelcore (modelcore.manager.ModelManager),
-this module hands it a modelcore.store.FileSystemStore over the right directory+step.
-
-Dropped relative to nanochat's version: LegacyCheckpointStore (tinylab has no pre-modelcore
-checkpoints to migrate), arch-aware tag naming (tinylab has only one preset family, "gpt"),
-resume support (load_checkpoint/load_optimizer_state -- an already out-of-scope feature), and the
-config_override load-time hook (served only PEFT/adapters, also out of scope).
+Checkpoint naming policy: which directory, which step, which tag. Ported from nanochat's
+nanochat/checkpoint_manager.py -- the actual model/optimizer artifact format belongs to modelcore
+(modelcore.manager.ModelManager), this module hands it a modelcore.store.FileSystemStore over the
+right directory+step. See docs/architecture.md's "On-disk layout" for meta.json's full field list.
 """
 import json
 import os
@@ -24,6 +17,11 @@ CHECKPOINT_DIRS = {"base": "base_checkpoints", "sft": "chatsft_checkpoints"}
 
 
 def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=0):
+    """Writes model_data (a state_dict) and meta_data (a plain dict -- see docs/architecture.md's
+    "On-disk layout" for the fields tinylab.ops.train populates) to checkpoint_dir at this step,
+    merging into any existing meta.json there rather than overwriting it. optimizer_data (also a
+    state_dict, or None to skip saving optimizer state) is written per-rank. Only rank 0 writes
+    model/meta; every rank writes its own optimizer shard."""
     store = FileSystemStore(checkpoint_dir, step)
     if rank == 0:
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -73,6 +71,8 @@ def build_model(checkpoint_dir, step, device, phase):
 
 
 def find_last_step(checkpoint_dir):
+    """The highest step number among checkpoint_dir's model_<step>.pt files. Raises
+    FileNotFoundError if there aren't any."""
     pattern = re.compile(r"model_(\d+)\.pt$")
     steps = []
     for filename in os.listdir(checkpoint_dir):

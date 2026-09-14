@@ -1,8 +1,7 @@
 """
 Corpus identity: which URL, which shard count, which HF dataset -- the parts datacore/benchcore
-deliberately don't know ("a corpus's URL" is a host concept, see llmllab/docs/subsystem-
-conventions.md). Ported and merged from nanochat's nanochat/dataset.py + nanochat/sft_data.py
-(llmllab/nanochat).
+deliberately don't know ("a corpus's URL" is a host concept). Ported and merged from nanochat's
+nanochat/dataset.py + nanochat/sft_data.py.
 """
 import os
 

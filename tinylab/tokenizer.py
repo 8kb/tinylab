@@ -1,11 +1,10 @@
 """
-BPE tokenizer, ported from nanochat's nanochat/tokenizer.py (llmllab/nanochat) so tinylab produces
-identical token ids without depending on nanochat itself -- nanochat is a virtual uv project (no
-[build-system]) and can't be installed as a library; see AGENTS.md. Inference-only: tinylab ships
-a committed vocab (default_tokenizer/) and has no `tok_train` op, so the rustbpe-based training
-path, and everything else not reachable from a job file, is dropped relative to the original --
-kept: encode/decode, the special-token and byte-length helpers evaluate_bpb needs, and the two
-conversation-rendering entry points (chat SFT data prep, benchcore's generative eval).
+BPE tokenizer, ported from nanochat's nanochat/tokenizer.py so tinylab produces identical token
+ids without depending on nanochat itself -- see AGENTS.md for why it can't be a real dependency.
+Inference-only: tinylab ships a committed vocab (default_tokenizer/) and has no `tok_train` op, so
+the rustbpe-based training path is dropped -- kept: encode/decode, the special-token and
+byte-length helpers evaluate_bpb needs, and the two conversation-rendering entry points (chat SFT
+data prep, benchcore's generative eval).
 """
 import copy
 import hashlib

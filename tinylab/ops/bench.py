@@ -1,12 +1,8 @@
 """
 The `bench` op: score a checkpoint against benchcore's CORE suite or its chat-task suite (ARC/
-MMLU/GSM8K/HumanEval). Ported and trimmed from nanochat's scripts/base_eval.py + scripts/
-chat_eval.py (llmllab/nanochat) -- unified into one op selected by "suite" instead of two scripts.
-
-A modelcore Model already satisfies benchcore.Model (it's __call__(input_ids) -> logits and has
-get_device()); tinylab.engine.Engine is the Generator adapter benchcore's generative tasks
-(GSM8K, HumanEval) need -- see benchcore/AGENTS.md's protocols.py for why that adapter has to live
-in the host, not in either subsystem.
+MMLU/GSM8K/HumanEval). Ported from nanochat's scripts/base_eval.py + scripts/chat_eval.py, unified
+into one op selected by "suite" instead of two scripts -- see docs/architecture.md for the
+Model/Generator adapter split, docs/job-file.md for every cfg key this module reads.
 """
 from tinylab import checkpoints
 from tinylab.engine import Engine
@@ -27,12 +23,18 @@ def accepted_keys(cfg: dict) -> set:
 
 
 def _load(cfg, ctx):
+    """Loads the checkpoint cfg names: cfg["source"] ("base"|"sft", default "sft") is the tag
+    namespace, cfg["model_tag"] the tag within it, cfg["model_step"] a specific step (default:
+    latest). Returns (model, tokenizer, meta_data)."""
     assert "model_tag" in cfg, "bench: 'model_tag' is required"
     source = cfg.get("source", "sft")
     return checkpoints.load_model(source, ctx.device, phase="eval", model_tag=cfg["model_tag"], step=cfg.get("model_step"))
 
 
 def _run_core(cfg, ctx, model, tokenizer):
+    """suite="core": scores model against DCLM's CORE suite, capped at cfg["max_per_task"]
+    examples per task if given (must leave enough for each task's own few-shot count -- see
+    AGENTS.md). Returns {"op": "bench", "suite": "core", "core_metric", "results"}."""
     from benchcore import load_core_suite
     suite = load_core_suite(get_base_dir(), max_per_task=cfg.get("max_per_task"))
     report = ctx.bench_manager.core(model, tokenizer, suite, device=ctx.device, rank=ctx.rank, world_size=ctx.world_size)
@@ -43,6 +45,9 @@ def _run_core(cfg, ctx, model, tokenizer):
 
 
 def _run_chat(cfg, ctx, model, tokenizer):
+    """suite="chat": scores model against cfg["tasks"] (default: all of ARC-Easy, ARC-Challenge,
+    MMLU, GSM8K, HumanEval), generating with tinylab.engine.Engine as the benchcore.Generator
+    adapter. Returns {"op": "bench", "suite": "chat", "chatcore_metric", "results"}."""
     from benchcore import ARC, ALL_CHAT_TASKS, GSM8K, HumanEval, MMLU
     cache_dir = get_base_dir()
     builders = {
@@ -71,6 +76,8 @@ def _run_chat(cfg, ctx, model, tokenizer):
 
 
 def run(cfg: dict, ctx) -> dict:
+    """Runs one bench step: cfg is a resolved job-file step (see docs/job-file.md for every key),
+    ctx the shared Context for this job run."""
     assert "suite" in cfg, "bench: 'suite' is required ('core' or 'chat')"
     suite = cfg["suite"]
     assert suite in ("core", "chat"), f"bench: suite must be 'core' or 'chat', got {suite!r}"

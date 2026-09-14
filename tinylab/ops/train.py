@@ -1,13 +1,8 @@
 """
 The `train` op: one loop for both kind="base" (pretrain from scratch) and kind="sft" (finetune a
-base checkpoint on conversation data). Ported and heavily trimmed from nanochat's
-scripts/base_train.py + scripts/chat_sft.py + nanochat/scaling.py (llmllab/nanochat).
-
-Deliberately dropped, since tinylab is the minimal host, not the architecture playground: wandb,
-fp8, LoRA/DoRA adapters, GradScaler (fp16), --resume-from-step, doc-masking, mid-training CORE/
-sample eval, periodic checkpointing (only a final save), and torch.compile -- eager execution
-keeps a job's very first step from potentially sitting in MPS's cold-shader-cache compile stall
-for minutes on this dev machine (see AGENTS.md's "Invariants that will bite you").
+base checkpoint on conversation data). Ported from nanochat's scripts/base_train.py +
+scripts/chat_sft.py + nanochat/scaling.py -- see docs/architecture.md for what's deliberately
+dropped relative to that, and docs/job-file.md for every cfg key this module reads.
 """
 import math
 import os
@@ -64,6 +59,29 @@ class TrainingPlan:
 def derive_training_plan(*, num_scaling_params, d_ref_scaling_params, num_flops_per_token,
                           target_param_data_ratio, target_flops, num_iterations,
                           total_batch_size, weight_decay):
+    """Derives a base-training horizon (iterations, batch size) and the muP corrections that
+    follow from it, given this model's stats and its depth-12 reference model's.
+
+    num_scaling_params: this model's scaling-relevant parameter count (ModelStats.num_scaling_params).
+    d_ref_scaling_params: the depth-12 reference model's scaling-relevant parameter count -- the
+        muP correction is relative to this reference, not to this model's own size.
+    num_flops_per_token: this model's FLOPs/token (ModelStats.flops_per_token), for target_flops.
+    target_param_data_ratio: tokens-per-parameter ratio (Chinchilla-style) -- also sets the token
+        target D_REF is scaled against, regardless of which horizon source below actually wins.
+    target_flops: a total-FLOPs training budget; -1 to not use this as the horizon source.
+    num_iterations: an explicit horizon in steps; -1 to derive one instead (num_iterations, if
+        given, always wins over target_flops/target_param_data_ratio -- see horizon_source below).
+    total_batch_size: tokens per optimizer step; -1 to auto-derive one from the batch-size scaling
+        law instead (see auto_batch_size on the returned TrainingPlan).
+    weight_decay: the *unscaled* weight decay to correct by the plan's batch-size/token-count ratio.
+
+    Returns a TrainingPlan: the horizon actually chosen (num_iterations, horizon_source -- "user"
+    if num_iterations was given directly, else "target_flops" or "target_param_data_ratio",
+    whichever was used), the batch size actually used (total_batch_size, auto_batch_size -- whether
+    it was auto-derived), the muP correction (batch_lr_scale, to multiply every LR by;
+    weight_decay_scaled, to use instead of the raw weight_decay), and the resulting totals
+    (total_tokens, total_flops).
+    """
     target_tokens = int(target_param_data_ratio * num_scaling_params)
     D_REF = target_param_data_ratio * d_ref_scaling_params
 
@@ -100,6 +118,10 @@ def derive_training_plan(*, num_scaling_params, d_ref_scaling_params, num_flops_
 # -----------------------------------------------------------------------------
 
 def _open_dataset(cfg, ctx, kind, sequence_len):
+    """Opens the dataset this step trains on, raising a clear error (not letting datacore's own
+    FileNotFoundError propagate unexplained) if it hasn't been prepared yet, or was prepared with a
+    different sequence_len or tokenizer than this step is using. Returns (dataset_name, dataset,
+    token_bytes) -- token_bytes is the per-token-id byte-length table evaluate_bpb needs."""
     dataset_name = cfg.get("dataset") or prepare.default_dataset_name(kind, sequence_len, ctx.tokenizer)
     dataset_dir = prepare.prepared_dir(dataset_name)
     store = FileSystemDatasetStore(dataset_dir)
@@ -124,6 +146,20 @@ def _open_dataset(cfg, ctx, kind, sequence_len):
 
 
 def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac):
+    """Builds the two per-step schedule functions a training loop needs.
+
+    num_iterations: total training steps (the horizon derive_training_plan settled on, or an
+        explicit cfg["num_iterations"] for kind="sft").
+    warmup_steps: linear LR warmup length, in steps, before holding at the full LR multiplier 1.0.
+    warmdown_ratio: fraction of num_iterations spent linearly decaying the LR multiplier from 1.0
+        down to final_lr_frac, at the end of the run.
+    final_lr_frac: the LR multiplier warmdown decays to (not zero -- a small residual LR at the
+        very end of training).
+
+    Returns (get_lr_multiplier, get_muon_momentum): both take a 0-indexed step and return a float
+    -- get_lr_multiplier scales every param group's base LR; get_muon_momentum sets Muon's own
+    momentum directly (not a multiplier) for the "muon" param groups only.
+    """
     warmdown_iters = round(warmdown_ratio * num_iterations)
     # The Muon-momentum warmup ramps over this many early steps before holding at 0.97. Capped at
     # num_iterations // 3 (not always the original upstream constant, 400) so a short run --
@@ -154,6 +190,9 @@ def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac):
 
 
 def run(cfg: dict, ctx) -> dict:
+    """Runs one train step: cfg is a resolved job-file step (see docs/job-file.md for every key),
+    ctx the shared Context for this job run. Returns {"op": "train", "kind", "output_tag", "step",
+    "val_bpb", "total_training_time"}."""
     assert "kind" in cfg, "train: 'kind' is required ('base' or 'sft')"
     kind = cfg["kind"]
     assert kind in ("base", "sft"), f"train: kind must be 'base' or 'sft', got {kind!r}"

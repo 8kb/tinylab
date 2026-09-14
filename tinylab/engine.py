@@ -1,8 +1,8 @@
 """
 Inference engine: KV-cached generation plus the calculator tool-use state machine. Ported from
-nanochat's nanochat/engine.py (llmllab/nanochat), dropping only its __main__ equivalence-testing
-harness. Everything works over token id sequences -- the Engine knows nothing about tokenization
-beyond the handful of special tokens it needs for tool use.
+nanochat's nanochat/engine.py, dropping only its __main__ equivalence-testing harness. Everything
+works over token id sequences -- the Engine knows nothing about tokenization beyond the handful of
+special tokens it needs for tool use.
 
 Engine.generate_batch satisfies benchcore.protocols.Generator unmodified, so the same instance
 tinylab's `chat` command drives interactively is what tinylab.ops.bench hands to

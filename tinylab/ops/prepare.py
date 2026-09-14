@@ -1,9 +1,8 @@
 """
-The `prepare` op: tokenize + pack a corpus into a datacore dataset. Ported and trimmed from
-nanochat's scripts/data_prep.py (llmllab/nanochat) -- kind="base" downloads ClimbMix shards (if
-not already present) and packs them with BestFitCropPacker; kind="sft" builds the SmolTalk +
-MMLU + GSM8K conversation mixture and packs it with BestFitPadPacker. Dropped relative to the
-original: --describe/--deep/--compare-to (dataset introspection, not pipeline work).
+The `prepare` op: tokenize + pack a corpus into a datacore dataset. Ported from nanochat's
+scripts/data_prep.py -- kind="base" downloads ClimbMix shards (if not already present) and packs
+them with BestFitCropPacker; kind="sft" builds the SmolTalk + MMLU + GSM8K conversation mixture and
+packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this module reads.
 """
 import os
 import time
@@ -73,6 +72,10 @@ class _Truncated:
 
 
 def _prepare_base(cfg, ctx, sequence_len):
+    """kind="base": ensures cfg["shards"] ClimbMix train shards (plus the fixed val shard) are on
+    disk, downloading whatever's missing, then packs exactly those paths -- never however many
+    shard files a larger previous run happened to leave around. Returns (dataset_name, dataset_dir,
+    manifest)."""
     manager = ctx.data_manager
     dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, ctx.tokenizer)
     dataset_dir = prepared_dir(dataset_name)
@@ -99,6 +102,10 @@ def _prepare_base(cfg, ctx, sequence_len):
 
 
 def _build_sft_mixtures(cfg, ctx):
+    """Builds (train_mixture, val_mixture): SmolTalk + cfg["mmlu_epochs"] passes of MMLU's
+    auxiliary-train split + cfg["gsm8k_epochs"] passes of GSM8K's train split for train; a smaller
+    fixed val mixture (SmolTalk's own test split, plus capped MMLU/GSM8K test slices). Each is
+    truncated to cfg["max_conversations"] if given, for a fast smoke-sized run."""
     from benchcore import GSM8K, MMLU
     cache_dir = get_base_dir()
     mmlu_epochs = cfg.get("mmlu_epochs", 3)
@@ -122,6 +129,9 @@ def _build_sft_mixtures(cfg, ctx):
 
 
 def _prepare_sft(cfg, ctx, sequence_len):
+    """kind="sft": builds the conversation mixture (see _build_sft_mixtures), renders each
+    conversation to (ids, loss mask) via the tokenizer, and packs the result with BestFitPadPacker.
+    Returns (dataset_name, dataset_dir, manifest)."""
     manager = ctx.data_manager
     dataset_name = cfg.get("dataset") or default_dataset_name("sft", sequence_len, ctx.tokenizer)
     dataset_dir = prepared_dir(dataset_name)
@@ -148,6 +158,9 @@ def _prepare_sft(cfg, ctx, sequence_len):
 
 
 def run(cfg: dict, ctx) -> dict:
+    """Runs one prepare step: cfg is a resolved job-file step (see docs/job-file.md for every
+    key), ctx the shared Context for this job run. Returns {"op": "prepare", "kind", "dataset",
+    "dataset_dir", "splits": {"train"|"val": {"num_sequences", "num_tokens"}}}."""
     assert "kind" in cfg, "prepare: 'kind' is required ('base' or 'sft')"
     kind = cfg["kind"]
     assert kind in ("base", "sft"), f"prepare: kind must be 'base' or 'sft', got {kind!r}"
