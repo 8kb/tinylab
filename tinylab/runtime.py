@@ -1,13 +1,17 @@
 """
-Runtime plumbing: base dir, device/DDP init, minimal logging. Ported from nanochat's
-nanochat/common.py (llmllab/nanochat) and trimmed to what tinylab's job runner needs -- no wandb
-stand-in, no GPU peak-FLOPs/bandwidth tables, no colored logging or banner. See that file for the
-untrimmed version if a future op needs MFU reporting back.
+Runtime plumbing: base dir, device/DDP init, minimal logging. Device/DDP/seed bring-up
+(is_ddp_requested/is_ddp_initialized/get_dist_info/autodetect_device_type/compute_init/
+compute_cleanup) now lives in modelcore.runtime -- this file's own copy was ported from nanochat's
+nanochat/common.py, and nanochat's copy has since moved to the same place, since modelcore has no
+host dependencies at all. Re-exported here so every existing `from tinylab.runtime import ...` call
+site keeps working unchanged.
 """
 import os
-import torch
-import torch.distributed as dist
 from modelcore.runtime import DEFAULT_RUNTIME
+from modelcore.runtime import (  # noqa: F401 -- re-exported below for existing call sites
+    autodetect_device_type, compute_cleanup, get_dist_info, is_ddp_initialized, is_ddp_requested,
+)
+from modelcore.runtime import compute_init as _compute_init
 
 # The dtype used for compute (matmuls, activations); master weights stay fp32. Detection lives in
 # modelcore.runtime (modelcore has no tinylab dependencies at all) -- this is a convenience
@@ -34,60 +38,9 @@ def print0(s="", **kwargs):
         print(s, **kwargs)
 
 
-def is_ddp_requested() -> bool:
-    """True if launched by torchrun (env present), even before init."""
-    return all(k in os.environ for k in ("RANK", "LOCAL_RANK", "WORLD_SIZE"))
-
-
-def is_ddp_initialized() -> bool:
-    return dist.is_available() and dist.is_initialized()
-
-
-def get_dist_info():
-    if is_ddp_requested():
-        return True, int(os.environ["RANK"]), int(os.environ["LOCAL_RANK"]), int(os.environ["WORLD_SIZE"])
-    return False, 0, 0, 1
-
-
-def autodetect_device_type():
-    if torch.cuda.is_available():
-        device_type = "cuda"
-    elif torch.backends.mps.is_available():
-        device_type = "mps"
-    else:
-        device_type = "cpu"
-    print0(f"Autodetected device type: {device_type}")
-    return device_type
-
-
 def compute_init(device_type="cuda"):
     """Basic device/seed/DDP initialization, shared by every op. device_type: cuda|cpu|mps, or
-    "auto" to autodetect."""
-    if device_type == "auto" or device_type == "":
-        device_type = autodetect_device_type()
-    assert device_type in ("cuda", "mps", "cpu"), f"Invalid device type: {device_type}"
-    if device_type == "cuda":
-        assert torch.cuda.is_available(), "device_type='cuda' but CUDA is not available"
-    if device_type == "mps":
-        assert torch.backends.mps.is_available(), "device_type='mps' but MPS is not available"
-
-    torch.manual_seed(42)
-    if device_type == "cuda":
-        torch.cuda.manual_seed(42)
-        torch.set_float32_matmul_precision("high")
-
-    is_ddp_req, ddp_rank, ddp_local_rank, ddp_world_size = get_dist_info()
-    if is_ddp_req and device_type == "cuda":
-        device = torch.device("cuda", ddp_local_rank)
-        torch.cuda.set_device(device)
-        dist.init_process_group(backend="nccl", device_id=device)
-        dist.barrier()
-    else:
-        device = torch.device(device_type)
-
-    return is_ddp_req, ddp_rank, ddp_local_rank, ddp_world_size, device
-
-
-def compute_cleanup():
-    if is_ddp_initialized():
-        dist.destroy_process_group()
+    "auto"/"" to autodetect. Mechanism lives in modelcore.runtime.compute_init (see this module's
+    own docstring); this wrapper only routes the autodetection message through print0 (rank-0-only
+    printing), matching this repo's original behavior."""
+    return _compute_init(device_type, log=print0)

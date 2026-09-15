@@ -124,3 +124,35 @@ invariant owned by modelcore, not something tinylab's own loop controls or can o
 one) and trimmed to what a job-file-driven pipeline needs — `nanochat` is a virtual uv project (no
 `[build-system]`) and can't be a real dependency, so this is a port, not an import.
 `tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping in.
+
+Several pieces that started as ports (byte-identical copies of nanochat code, since neither host
+could depend on the other) have since moved into the subsystems all three repos already share,
+once the duplication became visible with both ports in hand — modelcore has no host dependencies
+at all, so this isn't a new coupling, just recognizing mechanism that belonged there from the
+start:
+
+- `runtime.py`'s device/DDP/seed bring-up (`compute_init`/`compute_cleanup`/
+  `autodetect_device_type`) → `modelcore.runtime`.
+- `ops/train.py`'s scaling-law horizon derivation (`derive_training_plan`/`TrainingPlan`/`B_REF`)
+  → `modelcore.scaling`; the LR-multiplier/Muon-momentum schedule shapes → `modelcore.optim.schedules`
+  (the param-group mutation itself is `ModelManager.apply_schedule`, since it touches the
+  optimizer's own on-disk format).
+- `checkpoints.py`'s `meta.json` merge and `model_<step>.pt` step scan → `modelcore.store`'s
+  `FileSystemStore.update_meta`/`last_step`.
+- `engine.py`'s tool-use decode loop (`RowState`, the forced-token deque, the tool start/end state
+  machine) → `modelcore.generate.generate_with_tools`/`collect_batch`, driven by a `ToolSpec` whose
+  `run=` is `Engine._run_calculator` — `use_calculator` itself (the `eval()` sandbox) stays here,
+  it's the one thing that's actually this repo's own.
+- `presets.py`'s `resolve_reference_config` mechanism (re-expanding `config.reference`) →
+  `modelcore.config.spec.resolve_reference_config`, given this repo's own `expand` as a parameter.
+- `ops/train.py`'s dataset-open validation → `DataManager.open(..., expect_sequence_len=,
+  expect_fingerprint=)`, raising `datacore.DatasetMismatch`.
+- `ops/prepare.py`'s `TaskMixtureTokenSource` → `datacore.ExampleTokenSource(mixture, render=...,
+  name=...)`; its `_Truncated` wrapper is gone entirely -- `datacore.ExampleMixture`'s own `stop=`
+  kwarg already clamps to the true length.
+- `ops/bench.py`'s chat-task-name → task-class dict → `benchcore.build_chat_tasks`; its CORE-suite
+  load-then-score → `BenchManager.core_suite`.
+
+What's left in each of these files is what's actually specific to tinylab: naming/tag policy,
+job-file key handling, the cosine weight-decay schedule (no modelcore equivalent), and the
+mixture/corpus recipes themselves.

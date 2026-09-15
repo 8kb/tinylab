@@ -8,6 +8,7 @@ is the one place in tinylab that knows them. Only the "gpt" preset is kept -- se
 docs/architecture.md for what else tinylab drops relative to nanochat.
 """
 from modelcore import ComponentSpec, ModelConfig
+from modelcore import resolve_reference_config as _resolve_reference_config
 
 # -----------------------------------------------------------------------------
 # Derivation rules: how a depth dial becomes concrete per-layer values.
@@ -120,9 +121,17 @@ def resolve_model_config(model_config, depth, *, aspect_ratio, head_dim, max_seq
 def resolve_reference_config(resolved_config: ModelConfig, ref_depth: int) -> ModelConfig:
     """The muP scaling-law reference model (tinylab.ops.train's d_ref) at ref_depth (12), for a
     config resolve_model_config already resolved to `resolved_config`. expand() always stamps a
-    `reference` block on its output, so this works uniformly for any preset-derived config."""
-    assert resolved_config.reference is not None, (
-        f"config has no 'reference' block, so its muP scaling-law reference model can't be "
-        f"re-derived automatically at depth {ref_depth}; pass \"d_ref_scaling_params\" instead"
-    )
-    return expand(resolved_config.reference["preset"], ref_depth, **resolved_config.reference["kwargs"])
+    `reference` block on its output, so this works uniformly for any preset-derived config.
+
+    Mechanism (re-expanding config.reference via `expand`) now lives in modelcore.config.spec --
+    nanochat carried an identical copy of this exact function. This wrapper exists only to (a)
+    keep this module's existing `presets.resolve_reference_config(config, depth)` call signature
+    and error message, and (b) supply modelcore with *this* repo's own `expand`, since modelcore
+    knows nothing about what presets exist."""
+    try:
+        return _resolve_reference_config(resolved_config, ref_depth, expand)
+    except AssertionError:
+        raise AssertionError(
+            f"config has no 'reference' block, so its muP scaling-law reference model can't be "
+            f"re-derived automatically at depth {ref_depth}; pass \"d_ref_scaling_params\" instead"
+        )

@@ -6,9 +6,9 @@ right directory+step. See docs/architecture.md's "On-disk layout" for meta.json'
 """
 import json
 import os
-import re
 
 from modelcore.store import FileSystemStore
+from modelcore.store import last_step as _last_step
 
 from tinylab.runtime import get_base_dir
 from tinylab.tokenizer import get_tokenizer
@@ -26,14 +26,7 @@ def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data,
     if rank == 0:
         os.makedirs(checkpoint_dir, exist_ok=True)
         store.write_model_state(model_data)
-        meta_path = os.path.join(checkpoint_dir, f"meta_{step:06d}.json")
-        existing = {}
-        if os.path.exists(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-        existing.update({k: v for k, v in meta_data.items() if k != "model_config"})
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2)
+        store.update_meta(meta_data)
         if "model_config" in meta_data:
             store.write_config(meta_data["model_config"])
     if optimizer_data is not None:
@@ -72,16 +65,9 @@ def build_model(checkpoint_dir, step, device, phase):
 
 def find_last_step(checkpoint_dir):
     """The highest step number among checkpoint_dir's model_<step>.pt files. Raises
-    FileNotFoundError if there aren't any."""
-    pattern = re.compile(r"model_(\d+)\.pt$")
-    steps = []
-    for filename in os.listdir(checkpoint_dir):
-        match = pattern.search(filename)
-        if match:
-            steps.append(int(match.group(1)))
-    if not steps:
-        raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
-    return max(steps)
+    FileNotFoundError if there aren't any. Naming mechanics moved to modelcore.store.last_step --
+    nanochat carried an identical copy."""
+    return _last_step(checkpoint_dir)
 
 
 def load_model(source, device, phase, model_tag, step=None):

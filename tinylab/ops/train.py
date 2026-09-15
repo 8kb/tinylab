@@ -4,13 +4,13 @@ base checkpoint on conversation data). Ported from nanochat's scripts/base_train
 scripts/chat_sft.py + nanochat/scaling.py -- see docs/architecture.md for what's deliberately
 dropped relative to that, and docs/job-file.md for every cfg key this module reads.
 """
-import math
 import os
 import time
-from dataclasses import dataclass
 
-from datacore import FileSystemDatasetStore
-from modelcore import OptimizerHparams
+from datacore import DatasetMismatch, FileSystemDatasetStore
+from modelcore import OptimizerHparams, derive_training_plan
+from modelcore.optim.schedules import lr_multiplier, muon_momentum
+from modelcore.scaling import B_REF  # noqa: F401 -- re-exported for existing call sites
 
 from tinylab import checkpoints, presets
 from tinylab.ops import prepare
@@ -35,86 +35,9 @@ def accepted_keys(cfg: dict) -> set:
 
 
 # -----------------------------------------------------------------------------
-# Scaling-law horizon derivation (kind="base" only). Ported whole from nanochat/scaling.py: given
-# parameter/FLOPs counts for a model (and its d12 muP reference), derive the training horizon
-# (iterations/tokens), batch size, and the LR/weight-decay corrections that follow from it. Pure
-# math, no I/O.
-
-B_REF = 2**19  # optimal batch size at d12 ~= 524,288 tokens (measured empirically, upstream)
-
-
-@dataclass
-class TrainingPlan:
-    target_tokens: int
-    total_batch_size: int
-    auto_batch_size: bool
-    batch_lr_scale: float
-    weight_decay_scaled: float
-    num_iterations: int
-    horizon_source: str
-    total_tokens: int
-    total_flops: float
-
-
-def derive_training_plan(*, num_scaling_params, d_ref_scaling_params, num_flops_per_token,
-                          target_param_data_ratio, target_flops, num_iterations,
-                          total_batch_size, weight_decay):
-    """Derives a base-training horizon (iterations, batch size) and the muP corrections that
-    follow from it, given this model's stats and its depth-12 reference model's.
-
-    num_scaling_params: this model's scaling-relevant parameter count (ModelStats.num_scaling_params).
-    d_ref_scaling_params: the depth-12 reference model's scaling-relevant parameter count -- the
-        muP correction is relative to this reference, not to this model's own size.
-    num_flops_per_token: this model's FLOPs/token (ModelStats.flops_per_token), for target_flops.
-    target_param_data_ratio: tokens-per-parameter ratio (Chinchilla-style) -- also sets the token
-        target D_REF is scaled against, regardless of which horizon source below actually wins.
-    target_flops: a total-FLOPs training budget; -1 to not use this as the horizon source.
-    num_iterations: an explicit horizon in steps; -1 to derive one instead (num_iterations, if
-        given, always wins over target_flops/target_param_data_ratio -- see horizon_source below).
-    total_batch_size: tokens per optimizer step; -1 to auto-derive one from the batch-size scaling
-        law instead (see auto_batch_size on the returned TrainingPlan).
-    weight_decay: the *unscaled* weight decay to correct by the plan's batch-size/token-count ratio.
-
-    Returns a TrainingPlan: the horizon actually chosen (num_iterations, horizon_source -- "user"
-    if num_iterations was given directly, else "target_flops" or "target_param_data_ratio",
-    whichever was used), the batch size actually used (total_batch_size, auto_batch_size -- whether
-    it was auto-derived), the muP correction (batch_lr_scale, to multiply every LR by;
-    weight_decay_scaled, to use instead of the raw weight_decay), and the resulting totals
-    (total_tokens, total_flops).
-    """
-    target_tokens = int(target_param_data_ratio * num_scaling_params)
-    D_REF = target_param_data_ratio * d_ref_scaling_params
-
-    auto_batch_size = total_batch_size == -1
-    if auto_batch_size:
-        batch_size_ratio = target_tokens / D_REF
-        predicted_batch_size = B_REF * batch_size_ratio ** 0.383
-        total_batch_size = 2 ** round(math.log2(predicted_batch_size))
-
-    batch_ratio = total_batch_size / B_REF
-    batch_lr_scale = batch_ratio ** 0.5 if batch_ratio != 1.0 else 1.0
-    weight_decay_scaled = weight_decay * math.sqrt(total_batch_size / B_REF) * (D_REF / target_tokens)
-
-    if num_iterations > 0:
-        horizon_source = "user"
-    elif target_flops > 0:
-        horizon_source = "target_flops"
-        num_iterations = round(target_flops / (num_flops_per_token * total_batch_size))
-    elif target_param_data_ratio > 0:
-        horizon_source = "target_param_data_ratio"
-        num_iterations = target_tokens // total_batch_size
-    else:
-        raise ValueError("No training horizon specified: give num_iterations, target_flops, or target_param_data_ratio")
-
-    total_tokens_actual = total_batch_size * num_iterations
-    total_flops = num_flops_per_token * total_tokens_actual
-    return TrainingPlan(
-        target_tokens=target_tokens, total_batch_size=total_batch_size, auto_batch_size=auto_batch_size,
-        batch_lr_scale=batch_lr_scale, weight_decay_scaled=weight_decay_scaled, num_iterations=num_iterations,
-        horizon_source=horizon_source, total_tokens=total_tokens_actual, total_flops=total_flops,
-    )
-
-
+# Scaling-law horizon derivation (kind="base" only) is modelcore.derive_training_plan -- this
+# module's own copy was ported whole from nanochat/scaling.py; both now come from modelcore, which
+# has no host dependencies at all. See modelcore's own docs/architecture.md.
 # -----------------------------------------------------------------------------
 
 def _open_dataset(cfg, ctx, kind, sequence_len):
@@ -126,27 +49,30 @@ def _open_dataset(cfg, ctx, kind, sequence_len):
     dataset_dir = prepare.prepared_dir(dataset_name)
     store = FileSystemDatasetStore(dataset_dir)
     try:
-        dataset = ctx.data_manager.open(store)
+        # expect_sequence_len/expect_fingerprint: datacore's own (opt-in) comparison now, not a
+        # hand-written check -- see datacore/AGENTS.md's "tokenizer fingerprint" invariant for why
+        # datacore itself still never decides *to* compare.
+        dataset = ctx.data_manager.open(store, expect_sequence_len=sequence_len, expect_fingerprint=ctx.tokenizer.fingerprint())
     except FileNotFoundError:
         raise SystemExit(
             f"No prepared dataset found at {dataset_dir}. Run a \"prepare\" step first, with "
             f"kind={kind!r} and matching \"sequence_len\"."
         )
-    if dataset.info.sequence_len != sequence_len:
-        raise SystemExit(f"Dataset {dataset_name!r} was prepared at sequence_len={dataset.info.sequence_len}, but this step uses {sequence_len}.")
-    # Host-owned check -- datacore deliberately doesn't compare tokenizer identity itself (see
-    # datacore/AGENTS.md); a mismatch here would otherwise train on silently-wrong token meanings.
-    if dataset.info.tokenizer_fingerprint != ctx.tokenizer.fingerprint():
+    except DatasetMismatch as e:
+        if e.reason == "sequence_len":
+            raise SystemExit(f"Dataset {dataset_name!r} was prepared at sequence_len={e.actual}, but this step uses {sequence_len}.")
         raise SystemExit(
             f"Dataset {dataset_name!r} was prepared against tokenizer fingerprint "
-            f"{dataset.info.tokenizer_fingerprint}, but the local tokenizer's fingerprint is "
-            f"{ctx.tokenizer.fingerprint()} -- refusing to train on it."
+            f"{e.actual}, but the local tokenizer's fingerprint is "
+            f"{e.expected} -- refusing to train on it."
         )
     return dataset_name, dataset, ctx.data_manager.token_bytes(dataset)
 
 
 def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac):
-    """Builds the two per-step schedule functions a training loop needs.
+    """Builds the two per-step schedule functions a training loop needs, from
+    modelcore.optim.schedules.lr_multiplier/muon_momentum (this module's own copies were ported
+    from nanochat's scripts/base_train.py, which now shares the same source).
 
     num_iterations: total training steps (the horizon derive_training_plan settled on, or an
         explicit cfg["num_iterations"] for kind="sft").
@@ -160,31 +86,17 @@ def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac):
     -- get_lr_multiplier scales every param group's base LR; get_muon_momentum sets Muon's own
     momentum directly (not a multiplier) for the "muon" param groups only.
     """
-    warmdown_iters = round(warmdown_ratio * num_iterations)
     # The Muon-momentum warmup ramps over this many early steps before holding at 0.97. Capped at
-    # num_iterations // 3 (not always the original upstream constant, 400) so a short run --
-    # every job shipped in this repo trains well under 400 steps -- doesn't spend its *entire*
-    # horizon inside the warmup branch, which would make the warmdown branch below unreachable.
-    momentum_warmup_iters = max(1, min(400, num_iterations // 3))
+    # num_iterations // 3 (not modelcore's own default of 400) so a short run -- every job shipped
+    # in this repo trains well under 400 steps -- doesn't spend its *entire* horizon inside the
+    # warmup branch, which would make the warmdown branch below unreachable.
+    momentum_warmup_steps = max(1, min(400, num_iterations // 3))
 
     def get_lr_multiplier(it):
-        if it < warmup_steps:
-            return (it + 1) / max(warmup_steps, 1)
-        elif it <= num_iterations - warmdown_iters:
-            return 1.0
-        else:
-            progress = (num_iterations - it) / max(warmdown_iters, 1)
-            return progress + (1 - progress) * final_lr_frac
+        return lr_multiplier(it, num_iterations, warmup_steps, warmdown_ratio, final_lr_frac)
 
     def get_muon_momentum(it):
-        warmdown_start = num_iterations - warmdown_iters
-        if it < momentum_warmup_iters:
-            frac = it / momentum_warmup_iters
-            return (1 - frac) * 0.85 + frac * 0.97
-        elif it >= warmdown_start:
-            progress = (it - warmdown_start) / max(warmdown_iters, 1)
-            return 0.97 * (1 - progress) + 0.90 * progress
-        return 0.97
+        return muon_momentum(it, num_iterations, warmdown_ratio, momentum_warmup_steps=momentum_warmup_steps)
 
     return get_lr_multiplier, get_muon_momentum
 
@@ -299,11 +211,8 @@ def run(cfg: dict, ctx) -> dict:
             (loss / grad_accum_steps).backward()
             x, y, dataloader_state = next(train_loader)
         lrm = get_lr_multiplier(step)
-        muon_momentum = get_muon_momentum(step)
-        for group in optimizer.param_groups:
-            group["lr"] = group["initial_lr"] * lrm
-            if group.get("kind") == "muon":
-                group["momentum"] = muon_momentum
+        muon_momentum_value = get_muon_momentum(step)
+        manager.apply_schedule(optimizer, lr_mult=lrm, muon_momentum=muon_momentum_value)
         optimizer.step()
         model.zero_grad(set_to_none=True)
         if step % 10 == 0:

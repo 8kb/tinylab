@@ -7,7 +7,7 @@ packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this modu
 import os
 import time
 
-from datacore import BestFitCropPacker, BestFitPadPacker, EncodedDoc, ExampleMixture, FileSystemDatasetStore, ParquetDirectorySource
+from datacore import BestFitCropPacker, BestFitPadPacker, ExampleMixture, ExampleTokenSource, FileSystemDatasetStore, ParquetDirectorySource
 
 from tinylab import data
 from tinylab.runtime import get_base_dir, print0
@@ -34,41 +34,6 @@ def prepared_dir(name: str) -> str:
 def default_dataset_name(kind: str, sequence_len: int, tokenizer) -> str:
     stem = "climbmix" if kind == "base" else "sft"
     return f"{stem}_t{sequence_len}_{tokenizer.fingerprint()}"
-
-
-class TaskMixtureTokenSource:
-    """Adapts a datacore.ExampleMixture into datacore's TokenSource protocol: each conversation is
-    rendered (ids + per-token loss mask) here, in chunks, so DataManager.prepare gets a volume
-    flush boundary every `chunk_size` conversations rather than one giant flush at the end."""
-
-    def __init__(self, task_mixture, tokenizer, name, max_tokens=DEFAULT_MAX_TOKENS_PER_CONVERSATION, chunk_size=2000):
-        self.task_mixture = task_mixture
-        self.tokenizer = tokenizer
-        self.name = name
-        self.max_tokens = max_tokens
-        self.chunk_size = chunk_size
-
-    def token_batches(self):
-        n = len(self.task_mixture)
-        for start in range(0, n, self.chunk_size):
-            end = min(start + self.chunk_size, n)
-            docs = []
-            for i in range(start, end):
-                conversation = self.task_mixture[i]
-                ids, mask = self.tokenizer.render_conversation(conversation, max_tokens=self.max_tokens)
-                docs.append(EncodedDoc(ids=ids, mask=mask))
-            yield f"{self.name}[{start}:{end}]", docs
-
-
-class _Truncated:
-    """Caps an ExampleSet/ExampleMixture's apparent length, for smoke-test-sized mixtures."""
-    def __init__(self, task, limit):
-        self.task = task
-        self.limit = min(limit, len(task))
-    def __len__(self):
-        return self.limit
-    def __getitem__(self, index):
-        return self.task[index]
 
 
 def _prepare_base(cfg, ctx, sequence_len):
@@ -115,16 +80,16 @@ def _build_sft_mixtures(cfg, ctx):
         *[MMLU(subset="all", split="auxiliary_train", cache_dir=cache_dir) for _ in range(mmlu_epochs)],
         *[GSM8K(subset="main", split="train", cache_dir=cache_dir) for _ in range(gsm8k_epochs)],
     ]
-    train_mixture = ExampleMixture(train_tasks)
+    # max_conversations (smoke tests) caps both mixtures via ExampleMixture's own stop= kwarg --
+    # __len__ clamps stop to each mixture's true length itself, so this needs no separate
+    # min(max_conversations, len(val_mixture)) either -- see datacore.records.ExampleSet.
+    max_conversations = cfg.get("max_conversations")
+    train_mixture = ExampleMixture(train_tasks, stop=max_conversations)
     val_mixture = ExampleMixture([
         data.SmolTalk(split="test"),
         MMLU(subset="all", split="test", cache_dir=cache_dir, stop=5200),
         GSM8K(subset="main", split="test", cache_dir=cache_dir, stop=420),
-    ])
-    max_conversations = cfg.get("max_conversations")
-    if max_conversations is not None:
-        train_mixture = _Truncated(train_mixture, max_conversations)
-        val_mixture = _Truncated(val_mixture, max_conversations)  # _Truncated itself clamps to len(val_mixture)
+    ], stop=max_conversations)
     return train_mixture, val_mixture
 
 
@@ -142,9 +107,10 @@ def _prepare_sft(cfg, ctx, sequence_len):
 
     max_tokens = cfg.get("max_tokens_per_conversation", DEFAULT_MAX_TOKENS_PER_CONVERSATION)
     bos_id = ctx.tokenizer.get_bos_token_id()
+    render = lambda conversation: ctx.tokenizer.render_conversation(conversation, max_tokens=max_tokens)
     sources = {
-        "train": TaskMixtureTokenSource(train_mixture, ctx.tokenizer, "train", max_tokens=max_tokens),
-        "val": TaskMixtureTokenSource(val_mixture, ctx.tokenizer, "val", max_tokens=max_tokens),
+        "train": ExampleTokenSource(train_mixture, render, "train"),
+        "val": ExampleTokenSource(val_mixture, render, "val"),
     }
     packer = BestFitPadPacker(bos_token_id=bos_id, padding_id=cfg.get("sft_padding_id"), buffer_size=cfg.get("buffer_size", 1000))
     t0 = time.time()
