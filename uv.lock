@@ -3,16 +3,16 @@ revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.12' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
-    "python_full_version < '3.11' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version < '3.11' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version < '3.11' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version < '3.11' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
+    "python_full_version < '3.11' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version < '3.11' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version < '3.11' and extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
 ]
 conflicts = [[
@@ -45,8 +45,8 @@ wheels = [
 
 [[package]]
 name = "benchcore"
-version = "0.1.1"
-source = { git = "https://github.com/8kb/benchcore?tag=v0.1.1#c896c3083c718ebfd1abdebcf6bc8eb8bb7935b2" }
+version = "0.2.1"
+source = { git = "https://github.com/8kb/benchcore?tag=v0.2.1#f777d1c7a7dee9606b4fda96ecf1f57f0920a558" }
 dependencies = [
     { name = "datacore", extra = ["parquet"] },
     { name = "filelock" },
@@ -420,8 +420,8 @@ wheels = [
 
 [[package]]
 name = "datacore"
-version = "0.2.1"
-source = { git = "https://github.com/8kb/datacore?tag=v0.2.1#a62f3c30f8f0d425a40560f62e139c37bf0b2d24" }
+version = "0.3.0"
+source = { git = "https://github.com/8kb/datacore?tag=v0.3.0#0c3e231784ca4e69ea09ca4d9b51f6401d7f5142" }
 dependencies = [
     { name = "filelock" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
@@ -467,7 +467,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -810,8 +810,8 @@ wheels = [
 
 [[package]]
 name = "modelcore"
-version = "0.3.0"
-source = { git = "https://github.com/8kb/modelcore?tag=v0.3.0#27c0f0827e2d95628051d7c1011034f6f9e6dc6f" }
+version = "0.4.0"
+source = { git = "https://github.com/8kb/modelcore?tag=v0.4.0#4f43a8af3e983e6f4410ec8c1c29f76f7d065d23" }
 dependencies = [
     { name = "torch", version = "2.9.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu') or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu') or (extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu')" },
@@ -855,12 +855,12 @@ version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.12' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version >= '3.12' and extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
     "python_full_version == '3.11.*' and extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
@@ -1986,9 +1986,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.1.1" },
-    { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.2.1" },
-    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.3.0" },
+    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.2.1" },
+    { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.3.0" },
+    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.4.0" },
     { name = "setuptools", marker = "extra == 'cpu'", specifier = ">=65.0.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
     { name = "torch", specifier = "==2.9.1" },
