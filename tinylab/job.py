@@ -9,9 +9,9 @@ artifacts already exist.
 """
 import difflib
 import json
+import os
 
 from tinylab.ops import COMMON_KEYS, OPS
-from tinylab.presets import MODEL_ACCEPTED_KEYS
 
 
 class JobError(ValueError):
@@ -43,14 +43,10 @@ def _raise_unknown(d: dict, accepted: set, *, where: str):
 
 
 def check_known_keys(cfg: dict, accepted: set, *, where: str):
-    """Validates cfg's top-level keys against `accepted`, plus -- whenever cfg carries a "model"
-    block -- that block's own keys against presets.MODEL_ACCEPTED_KEYS. Public: both
-    resolve_steps (every op) and tinylab.chat (the "chat" block) call this, so a typo'd key is a
-    hard error in either place, not just one of them."""
+    """Validates cfg's top-level keys against `accepted`. Public: both resolve_steps (every op)
+    and tinylab.chat (the "chat" block) call this, so a typo'd key is a hard error in either
+    place, not just one of them."""
     _raise_unknown({k: v for k, v in cfg.items() if k not in ("name", "op")}, accepted, where=where)
-    model = cfg.get("model")
-    if isinstance(model, dict):
-        _raise_unknown(model, MODEL_ACCEPTED_KEYS, where=f'{where}, "model"')
 
 
 def load(job_path: str) -> dict:
@@ -66,9 +62,27 @@ def load(job_path: str) -> dict:
     return job
 
 
-def resolve_steps(job: dict, only: str | None = None) -> list[dict]:
+def _resolve_model_config_path(step: dict, job_dir: str, *, where: str):
+    """Mutates step["model_config"] in place from a (possibly relative) path to an absolute one,
+    resolved against the job file's own directory, and checks it exists -- before anything runs,
+    so a missing/typo'd path is a JobError up front rather than a FileNotFoundError mid-pipeline.
+    A step with no "model_config" key is untouched (harmless -- every op besides train kind=base
+    ignores it entirely; train itself requires it at run time, not here, since "model_config" is
+    a COMMON_KEYS default shared even by steps that never use it)."""
+    if "model_config" not in step:
+        return
+    path = step["model_config"]
+    abs_path = path if os.path.isabs(path) else os.path.normpath(os.path.join(job_dir, path))
+    if not os.path.isfile(abs_path):
+        raise JobError(f'{where}, "model_config": {path!r} does not exist (resolved to {abs_path!r})')
+    step["model_config"] = abs_path
+
+
+def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> list[dict]:
     """Deep-merges defaults into every step, validates op + keys, and returns the resolved list
-    (filtered to `only` if given). Raises JobError before anything is run."""
+    (filtered to `only` if given). Raises JobError before anything is run. job_dir: the job file's
+    own directory, against which a relative "model.config" path resolves (default "" == cwd, for
+    callers that don't have a real job file path, e.g. most of this repo's own tests)."""
     defaults = job.get("defaults", {})
     steps = job["steps"]
     names = [s.get("name") for s in steps]
@@ -88,8 +102,10 @@ def resolve_steps(job: dict, only: str | None = None) -> list[dict]:
             hint = f" -- did you mean {suggestion[0]!r}?" if suggestion else ""
             raise JobError(f"steps[{i}] ({raw_step['name']!r}): unknown op {op!r}{hint} (available: {sorted(OPS)})")
         step = _deep_merge(defaults, raw_step)
+        where = f"steps[{i}] ({step['name']!r}, op={op!r})"
         accepted = OPS[op].accepted_keys(step) | COMMON_KEYS
-        check_known_keys(step, accepted, where=f"steps[{i}] ({step['name']!r}, op={op!r})")
+        check_known_keys(step, accepted, where=where)
+        _resolve_model_config_path(step, job_dir, where=where)
         resolved.append(step)
 
     if only is not None:
@@ -109,7 +125,8 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False) -
     """Loads, validates, and (unless dry_run) runs every resolved step in order. Returns each
     step's result dict (or, for --dry-run, its fully resolved config instead)."""
     job = load(job_path)
-    steps = resolve_steps(job, only=only)
+    job_dir = os.path.dirname(os.path.abspath(job_path))
+    steps = resolve_steps(job, only=only, job_dir=job_dir)
 
     if dry_run:
         for step in steps:

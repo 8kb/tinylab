@@ -72,9 +72,12 @@ class Context:
 
 # Keys every op accepts even if it doesn't read all of them, because they're meant to live in a
 # job file's shared "defaults" block: "device" (compute_init's device_type), "sequence_len" (must
-# agree between a prepared dataset and the model that trains on it), "model" (architecture preset/
-# depth -- irrelevant to prepare/bench, which is fine, they just ignore it).
-COMMON_KEYS = {"device", "sequence_len", "model"}
+# agree between a prepared dataset and the model that trains on it), "model_config" (a path to a
+# materialized ModelConfig tree -- irrelevant to prepare/bench, which is fine, they just ignore
+# it), "world_size" (the GPU count a train step's total_batch_size/grad_accum math assumes --
+# checked against the actual launch, not read by prepare/bench, but a defaults-block value shared
+# by every step in a run either way).
+COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size"}
 
 
 from tinylab.ops import prepare, train, bench  # noqa: E402 -- after Context, to avoid a cycle

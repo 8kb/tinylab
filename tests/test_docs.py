@@ -10,7 +10,6 @@ import pytest
 from tinylab.chat import ACCEPTED_KEYS as CHAT_ACCEPTED_KEYS
 from tinylab.ops import COMMON_KEYS
 from tinylab.ops import bench, prepare, train
-from tinylab.presets import MODEL_ACCEPTED_KEYS
 
 DOC_PATH = Path(__file__).parent.parent / "docs" / "job-file.md"
 
@@ -20,7 +19,6 @@ DOC_PATH = Path(__file__).parent.parent / "docs" / "job-file.md"
 # single flat doc table should list, with no need to reach into each module's private
 # _BASE_KEYS/_SFT_KEYS/_CORE_KEYS/_CHAT_KEYS constants directly.
 SECTIONS = {
-    "## `model` block": lambda: MODEL_ACCEPTED_KEYS,
     "## Common to every op (`prepare`/`train`/`bench`)": lambda: COMMON_KEYS,
     "## `prepare`": lambda: prepare.accepted_keys({}),
     "## `train`": lambda: train.accepted_keys({}),

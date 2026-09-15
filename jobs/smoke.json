@@ -1,9 +1,10 @@
 {
-  "_comment": "Tiny end-to-end pipeline, sized to run on a laptop in minutes. sequence_len:2048 and core's max_per_task:24 aren't arbitrary -- see AGENTS.md's 'Invariants that will bite you'.",
+  "_comment": "Tiny end-to-end pipeline, sized to run on a laptop in minutes. sequence_len:2048 and core's max_per_task:24 aren't arbitrary -- see AGENTS.md's 'Invariants that will bite you'. configs/gpt_d4.json was dumped once via nanochat's `scripts/model_info.py --arch gpt --depth 4 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --dump-config` -- tinylab does no preset/depth derivation of its own, see AGENTS.md.",
   "defaults": {
     "device": "auto",
     "sequence_len": 2048,
-    "model": { "preset": "gpt", "depth": 4, "aspect_ratio": 64 }
+    "world_size": 1,
+    "model_config": "configs/gpt_d4.json"
   },
   "steps": [
     { "name": "data", "op": "prepare", "kind": "base", "shards": 2 },

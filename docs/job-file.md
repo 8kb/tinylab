@@ -16,30 +16,14 @@ A key starting with `_` (e.g. `"_comment"`, `"_note"`) is a freeform comment, ig
 | `steps` | An ordered list of pipeline steps. Required. Each needs its own `name` (unique) and `op` (`prepare`/`train`/`bench`). |
 | `chat` | The block `python -m tinylab chat` reads. Optional — omit it if this job file has nothing to chat with. |
 
-## `model` block
-
-Nested under a step's (or `defaults`') `"model"` key — shapes the architecture for `prepare`
-(irrelevant, ignored), `train` (`kind: base` only builds one), and `bench`/`chat` (only relevant
-indirectly, since they load an already-built checkpoint).
-
-| Key | Meaning | Default |
-|---|---|---|
-| `preset` | Architecture preset name. Only `"gpt"` exists today. | `"gpt"` |
-| `config` | A raw, already-materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers), used instead of `preset`+`depth` — e.g. one dumped by a prior `--dry-run`. | — |
-| `depth` | The one dial: how many transformer blocks. Everything else (`n_embd`, `n_head`, …) derives from it. | `6` |
-| `aspect_ratio` | `n_embd` grows with `depth * aspect_ratio`, rounded up to a multiple of `head_dim`. | `64` |
-| `head_dim` | Per-head dimension. | `128` |
-| `window_pattern` | Per-layer sliding-window tiling (`L`=full context, `S`=quarter context); tiled across layers, last layer always full. | `"SSSL"` |
-| `arch_opts` | Extra keyword args passed straight through to the preset's `expand()`. | `{}` |
-| `d_ref_scaling_params` | Overrides the muP scaling-law reference model's parameter count (normally re-derived automatically from a depth-12 reference model). `train`-only, `kind: base` only. | auto-derived |
-
 ## Common to every op (`prepare`/`train`/`bench`)
 
 | Key | Meaning | Default |
 |---|---|---|
 | `device` | `"cuda"` / `"mps"` / `"cpu"` / `"auto"`. One value for a whole run — read off the first resolved step, so put it in `defaults`. | `"auto"` |
 | `sequence_len` | Context length. Shared between `prepare` and `train`: a dataset is packed to a fixed `sequence_len`, and a `train` step raises if its own `sequence_len` doesn't match. Required by `prepare`/`train`; irrelevant to `bench`. | — |
-| `model` | See the block above. Irrelevant to `prepare`/`bench`, harmless if present (defaults commonly set it once and let every step inherit it). | — |
+| `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
+| `world_size` | The GPU count a `train` step's `total_batch_size`/grad-accum arithmetic assumes — checked against the actual launch (e.g. `torchrun --nproc_per_node`) and a hard error on mismatch, since the job file fixes GPU count rather than tinylab inferring it. Irrelevant to `prepare`/`bench`. Required by `train`. | — |
 
 ## `prepare`
 
@@ -63,29 +47,43 @@ GSM8K conversation mixture. Required: `kind`.
 ## `train`
 
 One loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a
-`source_tag`'d base checkpoint). Required: `kind`, `sequence_len` (in `defaults`); `sft` also
-requires `source_tag`.
+`source_tag`'d base checkpoint). Required: `kind`, `sequence_len` (in `defaults`), `world_size`,
+`total_batch_size`, `eval_tokens`; `base` also requires `model_config` and `num_iterations`; `sft`
+also requires `source_tag`.
+
+tinylab derives no training-horizon or batch-size scaling law of its own — nanochat's
+`target_flops`/`target_param_data_ratio` math (muP batch-size and weight-decay corrections
+included) lives only in `modelcore.scaling`, for nanochat's own use. Compute `total_batch_size`/
+`num_iterations` with nanochat's `scripts/model_info.py --target-flops=... --json`
+(`training_plan.total_batch_size` / `.num_iterations`) and paste the numbers in — see
+AGENTS.md.
 
 | Key | Meaning | Default | Which `kind` |
 |---|---|---|---|
 | `kind` | `"base"` or `"sft"`. | required | both |
 | `dataset` | Which prepared dataset to train on. | same auto-name as `prepare` | both |
 | `output_tag` | Checkpoint tag this step writes to, under `<base_dir>/{base_checkpoints\|chatsft_checkpoints}/`. | the step's own `name` | both |
-| `num_iterations` | Training horizon, in steps. `base`: `-1` (unset) defers to `target_flops`, then `target_param_data_ratio`. `sft`: unset derives one epoch over the dataset. | see left | both |
+| `num_iterations` | Training horizon, in steps. | required (base) / one epoch over the dataset (sft, unset) | both |
 | `device_batch_size` | Micro-batch size per device, per forward/backward. | `4` | both |
-| `total_batch_size` | Tokens per optimizer step, across grad-accum and all ranks; must be a multiple of `device_batch_size * sequence_len * world_size`. `base`: `-1` derives one from the muP scaling law. `sft`: derives from `device_batch_size` alone. | see left | both |
-| `embedding_lr` | Embedding-table learning rate (scaled by the batch-size correction on `base`). | `0.3` | both |
+| `total_batch_size` | Tokens per optimizer step, across grad-accum and all ranks; must be a multiple of `device_batch_size * sequence_len * world_size`. | required | both |
+| `embedding_lr` | Embedding-table learning rate. | `0.3` | both |
 | `unembedding_lr` | Unembedding (LM head) learning rate. | `0.008` (base) / `0.004` (sft) | both |
 | `matrix_lr` | Muon (matrix-parameter) learning rate. | `0.02` | both |
 | `scalar_lr` | Scalar-parameter learning rate. | `0.5` | both |
-| `weight_decay` | AdamW weight decay. On `base` this is then rescaled by the training-plan math (see `docs/architecture.md`). | `0.28` (base) / `0.0` (sft) | both |
+| `weight_decay` | AdamW weight decay, used verbatim (no batch-size rescale). | `0.28` (base) / `0.0` (sft) | both |
 | `warmup_steps` | Linear LR warmup length, in steps. | `5` (base) / `0` (sft) | both |
 | `warmdown_ratio` | Fraction of the run spent linearly decaying LR to `final_lr_frac`. | `0.65` (base) / `0.5` (sft) | both |
 | `final_lr_frac` | LR multiplier at the end of warmdown. | `0.05` (base) / `0.0` (sft) | both |
+| `muon_momentum_warmup_steps` | Steps Muon's own momentum ramps over before holding at 0.97. | `400` (`modelcore.optim.schedules.muon_momentum`'s own default) | both |
 | `eval_every` | Run a val-bpb pass every N steps (plus always at the final step). `0` disables eval entirely, including at the final step. | `50` | both |
-| `eval_tokens` | Tokens to evaluate per val pass. | `device_batch_size * sequence_len * world_size * 4` | both |
-| `target_flops` | Derive `num_iterations` from a total-FLOPs budget instead of setting it directly. | `-1.0` (unused) | base |
-| `target_param_data_ratio` | Derive `num_iterations` from a tokens-per-parameter ratio (Chinchilla-style) instead. | `12` | base |
+| `eval_tokens` | Tokens to evaluate per val pass. | required | both |
+| `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`; needs an H100+ GPU). | `false` | both |
+| `fp8_recipe` | FP8 scaling recipe (only `"tensorwise"` is implemented). | `"tensorwise"` | both |
+| `fp8_eval` | When `fp8` is on, measure val bpb directly in fp8 (`true`) instead of converting back to bf16 first (`false`). Irrelevant without `fp8`. | `true` | both |
+| `doc_masking` | Restrict attention to within each packed row's own document (BOS-delimited), instead of allowing attention across document boundaries within a row. | `false` | both |
+| `doc_masking_max_docs_per_row` | Override `build_doc_args`'s default per-row document budget (`DEFAULT_MAX_DOCS_PER_ROW=64`). | unset | both |
+| `adapter_lr` | Learning rate for adapter (LoRA/DoRA A/B) params. Only meaningful when `model_config` carries `adapters`. | `modelcore.OptimizerHparams.adapter_lr` | both |
+| `adapter_scalar_lr` | Learning rate for DoRA's per-channel magnitude param. | `modelcore.OptimizerHparams.adapter_scalar_lr` | both |
 | `source` | Checkpoint namespace to read the starting weights from (`"base"` or `"sft"`). | `"base"` | sft |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |

@@ -34,8 +34,11 @@ def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data,
         store.write_optimizer_state(optimizer_data, rank=rank)
 
 
-def build_model(checkpoint_dir, step, device, phase):
-    """Builds a model from a checkpoint. Returns (model, tokenizer, meta_data)."""
+def build_model(checkpoint_dir, step, device, phase, config_override=None):
+    """Builds a model from a checkpoint. config_override, if given, replaces the checkpoint's own
+    stored config (e.g. a hand-edited tree with adapters attached, loaded via
+    tinylab.modelconfig.load_model_config) -- see ModelManager.load_model's own docstring for the
+    adapter-reconciling load path this enables. Returns (model, tokenizer, meta_data)."""
     assert phase in ("train", "eval"), f"Invalid phase: {phase}"
     # A fresh ModelManager is cheap (it just wraps Runtime detection) and this is its only use
     # site -- no reason to hold one at module scope (see ops/__init__.py's "explicitly passed,
@@ -43,7 +46,7 @@ def build_model(checkpoint_dir, step, device, phase):
     from modelcore import ModelManager
     manager = ModelManager()
     store = FileSystemStore(checkpoint_dir, step)
-    model = manager.load_model(store, device=device, train=(phase == "train"))
+    model = manager.load_model(store, device=device, config=config_override, train=(phase == "train"))
     meta_path = os.path.join(checkpoint_dir, f"meta_{step:06d}.json")
     with open(meta_path, "r", encoding="utf-8") as f:
         meta_data = json.load(f)
@@ -70,13 +73,14 @@ def find_last_step(checkpoint_dir):
     return _last_step(checkpoint_dir)
 
 
-def load_model(source, device, phase, model_tag, step=None):
+def load_model(source, device, phase, model_tag, step=None, config_override=None):
     """source: 'base' | 'sft'. model_tag is required -- tinylab has no auto-discovery, since a job
-    file always names the tag it just trained or wants to load."""
+    file always names the tag it just trained or wants to load. config_override: see
+    build_model."""
     checkpoints_dir = os.path.join(get_base_dir(), CHECKPOINT_DIRS[source])
     checkpoint_dir = os.path.join(checkpoints_dir, model_tag)
     if step is None:
         step = find_last_step(checkpoint_dir)
-    model, tokenizer, meta_data = build_model(checkpoint_dir, step, device, phase)
+    model, tokenizer, meta_data = build_model(checkpoint_dir, step, device, phase, config_override=config_override)
     meta_data["model_tag"] = model_tag
     return model, tokenizer, meta_data

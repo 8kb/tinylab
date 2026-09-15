@@ -49,26 +49,30 @@ point is to prove the plumbing works end to end, not to produce something worth 
   "defaults": {
     "device": "auto",
     "sequence_len": 2048,
-    "model": { "preset": "gpt", "depth": 4, "aspect_ratio": 64 }
+    "world_size": 1,
+    "model_config": "configs/gpt_d4.json"
   },
   "steps": [
     { "name": "data", "op": "prepare", "kind": "base", "shards": 2 },
-    { "name": "pre",  "op": "train",   "kind": "base", "num_iterations": 30, "device_batch_size": 1, "total_batch_size": 2048 },
+    { "name": "pre",  "op": "train",   "kind": "base", "num_iterations": 30, "device_batch_size": 1, "total_batch_size": 2048, "eval_tokens": 2048 },
     { "name": "sftdata", "op": "prepare", "kind": "sft", "max_conversations": 200 },
-    { "name": "sft",  "op": "train",   "kind": "sft", "source_tag": "pre", "num_iterations": 20 },
+    { "name": "sft",  "op": "train",   "kind": "sft", "source_tag": "pre", "num_iterations": 20, "device_batch_size": 1, "total_batch_size": 2048, "eval_tokens": 2048 },
     { "name": "core", "op": "bench",   "suite": "core", "source": "sft", "model_tag": "sft", "max_per_task": 24 }
   ],
   "chat": { "source": "sft", "model_tag": "sft", "temperature": 0.6 }
 }
 ```
 
-This is (a trimmed copy of) `jobs/smoke.json` — a real, runnable pipeline. `jobs/speedrun.json` is
-the same shape at production scale, meant for a GPU pod.
+`"model_config"` names a materialized `modelcore.ModelConfig` tree — tinylab does no preset/
+depth-dial derivation of its own; dump one with nanochat's `scripts/model_info.py --dump-config`
+(see `jobs/configs/`). This is (a trimmed copy of) `jobs/smoke.json` — a real, runnable pipeline.
+`jobs/speedrun.json` is the same shape at production scale, meant for a GPU pod; `jobs/contest.json`
+compares two architectures in one pipeline.
 
 `"defaults"` deep-merges into every step and into `"chat"`; a step's own keys always win. Steps run
 top to bottom, with no dependency graph — each step instead names what it needs by checkpoint tag
-(`"source_tag"`, `"model_tag"`). An unrecognized key anywhere, including inside `"model"`, is a
-hard error with a did-you-mean suggestion. **See [`docs/job-file.md`](docs/job-file.md) for every
+(`"source_tag"`, `"model_tag"`). An unrecognized key anywhere is a hard error with a did-you-mean
+suggestion. **See [`docs/job-file.md`](docs/job-file.md) for every
 key, its meaning, and its default** — this example only shows a handful.
 
 ## Ops

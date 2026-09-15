@@ -10,7 +10,8 @@ tinylab/
   runtime.py             base dir, device/DDP init, print0
   tokenizer.py           RustBPETokenizer: BPE encode/decode, special tokens, conversation rendering
   default_tokenizer/     committed tokenizer.pkl + token_bytes.pt (a fixed, pre-trained vocab)
-  presets.py             depth dial -> concrete modelcore.ModelConfig tree
+  modelconfig.py          loads + validates a materialized modelcore.ModelConfig tree (no
+                          preset/depth-dial derivation -- that's nanochat's job, see below)
   checkpoints.py         checkpoint tag/step naming over modelcore's FileSystemStore
   engine.py               KV-cached generation + calculator tool use
   chat.py                 the `chat` CLI command
@@ -23,6 +24,9 @@ tinylab/
 jobs/
   smoke.json              tiny end-to-end pipeline, runs on a laptop in minutes
   speedrun.json            real-scale template for a multi-GPU pod
+  contest.json             two-architecture comparison, matching nanochat's runs/contest_d12.sh
+  configs/                 materialized ModelConfig trees the job files above point at, dumped by
+                          nanochat's scripts/model_info.py --dump-config (see AGENTS.md)
 ```
 
 ## From a job file to a run
@@ -60,9 +64,11 @@ multi-step job share one device/process-group setup instead of re-initializing i
 ## Where each subsystem's boundary sits
 
 - **`modelcore.ModelManager`** creates, loads, and saves models and optimizers, and computes their
-  FLOPs/param/KV-cache stats. `tinylab.presets` is the layer that turns a `"depth"` dial into the
-  concrete `ModelConfig` tree `ModelManager` actually builds — modelcore itself never sees a depth
-  dial, only the resolved tree.
+  FLOPs/param/KV-cache stats. `tinylab.modelconfig` loads and validates the materialized
+  `ModelConfig` tree a job file's `"model_config"` names — tinylab has no depth-dial layer of its
+  own; the tree is produced entirely by nanochat's `scripts/model_info.py --dump-config` (or hand-
+  written) before it ever reaches tinylab. modelcore itself never sees a depth dial either way,
+  only the resolved tree.
 - **`datacore.DataManager`** prepares a raw corpus into a packed, on-disk dataset and reads it back
   as batches. `tinylab.data` is the layer that knows *which* corpus (ClimbMix's URL, SmolTalk's
   HuggingFace path) — datacore itself has no opinion on where data comes from.
@@ -91,22 +97,62 @@ with a compatible tokenizer.
 ```
 
 `meta_<step>.json` carries: `step`, `val_bpb`, `tokenizer_fingerprint`, `user_config` (the resolved
-job-file step, minus `"model"` — that's already captured in `config_<step>.json`), `device_batch_size`,
+job-file step, minus `"model_config"` — that's already captured in `config_<step>.json`), `device_batch_size`,
 `max_seq_len`, `total_batch_size`, `dataloader_state_dict` (for exact-resume of the data reader,
 though tinylab itself has no `--resume` flag today), `total_training_time`, and for SFT checkpoints,
 `base_model_tag`/`base_model_step`. `tinylab.checkpoints.build_model` cross-checks
 `tokenizer_fingerprint` against the currently-loaded tokenizer before returning a model — a vocab-
 size match alone isn't enough to prove two tokenizers assign ids the same way.
 
+## No derivation rules, not just no depth dial
+
+`tinylab.presets` (a `"depth"` dial → concrete `ModelConfig` tree, one preset registered) is gone.
+`tinylab.modelconfig` replaced it: a job file's `"model_config"` names a path to an already-
+materialized tree — produced by nanochat's `scripts/model_info.py --dump-config`, since that's
+where the preset registry and the depth-dial derivation rules (`mup_dims`, `compute_window_sizes`,
+`gpt_lambda_schedule`, …) actually live. This isn't scope-trimming, it's the same rule
+`modelcore/AGENTS.md` states for its own tree — "a config tree carries only concrete,
+already-decided values, never a derivation rule" — applied to the whole job file, not just the
+`ModelConfig` part of it.
+
+The same rule removed `modelcore.scaling.derive_training_plan` from `tinylab.ops.train` too:
+`target_flops`/`target_param_data_ratio` and the muP batch-size/weight-decay corrections they fed
+are gone along with the reference-model machinery (`resolve_reference_config`,
+`d_ref_scaling_params`) that made them work. `total_batch_size`, `num_iterations` (for `kind:
+base`), and `eval_tokens` are now required job-file keys — compute them with nanochat's
+`scripts/model_info.py --target-flops=... --json` and paste the numbers in. `world_size` is a new
+required key for the same reason: a job file fixes the GPU count a run assumes (its
+`total_batch_size`/grad-accum arithmetic depends on it), checked against the actual launch rather
+than inferred from it. The literal defaults that remain (`matrix_lr: 0.02`, `warmup_steps: 5`, …)
+are concrete values, not rules, and stay.
+
 ## What tinylab deliberately doesn't do
 
 tinylab is the minimal host: one job file, four things it can do. Relative to `nanochat` (the
-architecture-playground host built on the same three subsystems), tinylab has no wandb logging, no
-fp8, no LoRA/DoRA adapters, no fp16 `GradScaler`, no `--resume-from-step`, no intra-document
-attention masking, no mid-training CORE/sample eval (only a final save), no periodic checkpointing,
-and no `torch.compile` in its own training loop (see "Why the training loop is eager" below). None
-of these are bugs — they're `nanochat`'s job, not tinylab's; adding one back means porting it the
-same way everything else here was ported, not inventing it fresh.
+architecture-playground host built on the same three subsystems), tinylab now has fp8, doc-masking,
+and LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
+adapter-override keys), but still no wandb logging, no fp16 `GradScaler`, no `--resume-from-step`,
+no mid-training CORE/sample eval (only a final save), no periodic checkpointing, and no
+`torch.compile` in its own training loop (see "Why the training loop is eager" below). None of
+these are bugs — they're `nanochat`'s job, not tinylab's; adding one back means porting it the same
+way everything else here was ported, not inventing it fresh.
+
+## What one job file still can't replace: `runs/contest_d12.sh`
+
+`jobs/contest.json` runs a two-architecture comparison (matching nanochat's
+`runs/contest_d12.sh` rows) as one tinylab pipeline — every architecture nanochat can dump is now
+reachable, which presets never allowed. It is not a drop-in replacement for the shell driver,
+though:
+
+- **No row matrix/sweep.** N architectures means N × 4 hand-written steps (prepare is shared, but
+  each architecture needs its own base-train, sft-train, and two bench steps). There is no
+  sweep/matrix/foreach construct anywhere in the job-file schema.
+- **No preflight budget.** `--dry-run` only echoes resolved step JSON — no GPU-hours/cost estimate.
+  Run nanochat's `scripts/model_info.py --json` per architecture before spending.
+- **No results aggregation.** Each op returns a dict `job.run_file` prints as one JSON line; there
+  is no `results.csv`, no joined comparison table.
+- **No skip-if-done resume.** `contest.sh` greps its CSV to skip finished rows after an
+  interruption; tinylab's only re-run granularity is `--only <step>`, one step at a time.
 
 ## Why the training loop is eager
 
@@ -118,7 +164,7 @@ invariant owned by modelcore, not something tinylab's own loop controls or can o
 
 ## Where things come from
 
-`tokenizer.py`, `presets.py`, `checkpoints.py`, `engine.py`, `chat.py`, `data.py`, `runtime.py`, and
+`tokenizer.py`, `checkpoints.py`, `engine.py`, `chat.py`, `data.py`, `runtime.py`, and
 `ops/{prepare,train,bench}.py` are each ported from a corresponding file in
 [`nanochat`](https://github.com/8kb/nanochat) (see each module's own docstring for exactly which
 one) and trimmed to what a job-file-driven pipeline needs — `nanochat` is a virtual uv project (no
@@ -133,18 +179,17 @@ start:
 
 - `runtime.py`'s device/DDP/seed bring-up (`compute_init`/`compute_cleanup`/
   `autodetect_device_type`) → `modelcore.runtime`.
-- `ops/train.py`'s scaling-law horizon derivation (`derive_training_plan`/`TrainingPlan`/`B_REF`)
-  → `modelcore.scaling`; the LR-multiplier/Muon-momentum schedule shapes → `modelcore.optim.schedules`
+- `ops/train.py`'s LR-multiplier/Muon-momentum schedule shapes → `modelcore.optim.schedules`
   (the param-group mutation itself is `ModelManager.apply_schedule`, since it touches the
-  optimizer's own on-disk format).
+  optimizer's own on-disk format). Scaling-law horizon derivation (`derive_training_plan`/
+  `TrainingPlan`/`B_REF`) lives in `modelcore.scaling` too, but tinylab no longer calls it at all —
+  see "No derivation rules, not just no depth dial" below.
 - `checkpoints.py`'s `meta.json` merge and `model_<step>.pt` step scan → `modelcore.store`'s
   `FileSystemStore.update_meta`/`last_step`.
 - `engine.py`'s tool-use decode loop (`RowState`, the forced-token deque, the tool start/end state
   machine) → `modelcore.generate.generate_with_tools`/`collect_batch`, driven by a `ToolSpec` whose
   `run=` is `Engine._run_calculator` — `use_calculator` itself (the `eval()` sandbox) stays here,
   it's the one thing that's actually this repo's own.
-- `presets.py`'s `resolve_reference_config` mechanism (re-expanding `config.reference`) →
-  `modelcore.config.spec.resolve_reference_config`, given this repo's own `expand` as a parameter.
 - `ops/train.py`'s dataset-open validation → `DataManager.open(..., expect_sequence_len=,
   expect_fingerprint=)`, raising `datacore.DatasetMismatch`.
 - `ops/prepare.py`'s `TaskMixtureTokenSource` → `datacore.ExampleTokenSource(mixture, render=...,

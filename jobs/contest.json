@@ -1,0 +1,32 @@
+{
+  "_comment": "Two-architecture contest, matching nanochat's runs/contest_d12.sh rows (gpt vs llama_kvshare_win, both d12, iso-FLOPs at 1e18) -- but as one tinylab pipeline instead of a shell driver, now that tinylab has no preset restriction of its own (see AGENTS.md). Not run on this laptop -- see tinylab/AGENTS.md (no CUDA). Launch on a 4-GPU pod with `torchrun --nproc_per_node=4 -m tinylab jobs/contest.json`.",
+  "_provenance": "configs/gpt_d12.json: scripts/model_info.py --arch gpt --depth 12 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --dump-config. configs/llama_kvshare_win_d12.json: same, --arch llama_kvshare_win --arch-opt kv_share_frac=0.5. Both rows' total_batch_size/num_iterations: the same command with --target-flops 1e18 --target-param-data-ratio=-1 --json (training_plan.total_batch_size / .num_iterations) -- tinylab derives no scaling law of its own.",
+  "_limits": "What this one job file cannot do that runs/contest_d12.sh can: no row matrix/sweep (each architecture is written out by hand below, N architectures means N x 4 explicit steps), no preflight GPU-hours/cost estimate (run nanochat's scripts/model_info.py --json first), no results.csv aggregation (each step prints its own result line; compare by reading the log), no skip-if-done resume (--only reruns one named step at a time). See tinylab/docs/architecture.md.",
+  "defaults": {
+    "device": "auto",
+    "sequence_len": 2048,
+    "world_size": 4
+  },
+  "steps": [
+    { "name": "basedata", "op": "prepare", "kind": "base", "shards": 45,
+      "_note": "shared corpus for both architectures -- this is what makes the comparison valid" },
+    { "name": "sftdata", "op": "prepare", "kind": "sft" },
+
+    { "name": "gpt_base", "op": "train", "kind": "base", "model_config": "configs/gpt_d12.json",
+      "total_batch_size": 524288, "num_iterations": 2511, "device_batch_size": 64,
+      "eval_every": 250, "eval_tokens": 10485760 },
+    { "name": "gpt_sft", "op": "train", "kind": "sft", "source_tag": "gpt_base", "device_batch_size": 64,
+      "total_batch_size": 524288, "eval_every": 200, "eval_tokens": 2097152 },
+
+    { "name": "kvshare_base", "op": "train", "kind": "base", "model_config": "configs/llama_kvshare_win_d12.json",
+      "total_batch_size": 524288, "num_iterations": 2659, "device_batch_size": 64,
+      "eval_every": 250, "eval_tokens": 10485760 },
+    { "name": "kvshare_sft", "op": "train", "kind": "sft", "source_tag": "kvshare_base", "device_batch_size": 64,
+      "total_batch_size": 524288, "eval_every": 200, "eval_tokens": 2097152 },
+
+    { "name": "gpt_core", "op": "bench", "suite": "core", "source": "base", "model_tag": "gpt_base" },
+    { "name": "kvshare_core", "op": "bench", "suite": "core", "source": "base", "model_tag": "kvshare_base" },
+    { "name": "gpt_chat", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "gpt_sft" },
+    { "name": "kvshare_chat", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "kvshare_sft" }
+  ]
+}

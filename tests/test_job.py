@@ -14,9 +14,18 @@ def _write_job(tmp_path, doc):
     return str(path)
 
 
+def _write_config(tmp_path, name="config.json"):
+    """A file "model_config" just needs to exist -- job.resolve_steps only checks existence and
+    absolutizes the path; content validation happens later, in modelconfig.load_model_config."""
+    path = tmp_path / name
+    path.write_text("{}")
+    return str(path)
+
+
 def test_defaults_deep_merge_and_step_own_keys_win(tmp_path):
+    config_path = _write_config(tmp_path)
     doc = {
-        "defaults": {"sequence_len": 256, "model": {"preset": "gpt", "depth": 4}},
+        "defaults": {"sequence_len": 256, "model_config": config_path},
         "steps": [
             {"name": "a", "op": "prepare", "kind": "base"},
             {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 512},
@@ -25,7 +34,7 @@ def test_defaults_deep_merge_and_step_own_keys_win(tmp_path):
     j = job.load(_write_job(tmp_path, doc))
     steps = job.resolve_steps(j)
     assert steps[0]["sequence_len"] == 256
-    assert steps[0]["model"] == {"preset": "gpt", "depth": 4}
+    assert steps[0]["model_config"] == config_path
     assert steps[1]["sequence_len"] == 512  # step's own key wins over defaults
 
 
@@ -89,12 +98,31 @@ def test_kind_specific_key_on_wrong_kind_raises(tmp_path):
         job.resolve_steps(j)
 
 
-def test_unknown_nested_model_key_raises(tmp_path):
+def test_model_config_key_typo_raises_with_suggestion(tmp_path):
     doc = {"steps": [{"name": "a", "op": "train", "kind": "base", "sequence_len": 8,
-                       "model": {"preset": "gpt", "dpeth": 4}}]}
+                       "modle_config": "x.json"}]}
     j = job.load(_write_job(tmp_path, doc))
-    with pytest.raises(job.JobError, match="depth"):
+    with pytest.raises(job.JobError, match="model_config"):
         job.resolve_steps(j)
+
+
+def test_model_config_path_resolves_relative_to_job_dir(tmp_path):
+    (tmp_path / "sub").mkdir()
+    config_path = _write_config(tmp_path / "sub")
+    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8,
+                       "model_config": "sub/config.json"}]}
+    job_path = _write_job(tmp_path, doc)
+    j = job.load(job_path)
+    steps = job.resolve_steps(j, job_dir=str(tmp_path))
+    assert steps[0]["model_config"] == config_path
+
+
+def test_missing_model_config_path_raises(tmp_path):
+    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8,
+                       "model_config": "does_not_exist.json"}]}
+    j = job.load(_write_job(tmp_path, doc))
+    with pytest.raises(job.JobError, match="does_not_exist.json"):
+        job.resolve_steps(j, job_dir=str(tmp_path))
 
 
 def test_underscore_keys_are_ignored(tmp_path):

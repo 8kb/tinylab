@@ -17,9 +17,17 @@ anywhere.)
 
 ## Invariants owned elsewhere
 
-- **A config tree carries only concrete, already-decided values, never a derivation rule.** The
-  rules (`presets.py`) are tinylab's own job to run once, at expansion time — see
-  [modelcore/AGENTS.md](https://github.com/8kb/modelcore/blob/main/AGENTS.md).
+- **A config tree carries only concrete, already-decided values, never a derivation rule.** This
+  is modelcore's invariant for `ModelConfig`, but tinylab applies it to the whole job file: there
+  is no `presets.py` here (deleted — depth-dial derivation, muP scaling-law horizon/batch-size/LR
+  math, all of it) and never will be. A job file's `"model_config"` names a path to an
+  already-materialized tree; every number tinylab used to derive (`total_batch_size`,
+  `num_iterations`, …) is a required key instead. Presets and the training-plan math still exist —
+  they're nanochat's job (`nanochat/architectures/`, `modelcore.scaling`), not tinylab's. Compute a
+  number with nanochat's `scripts/model_info.py --dump-config` / `--target-flops=... --json` and
+  paste it into the job file; don't add a derivation rule back into tinylab to avoid that step. See
+  [modelcore/AGENTS.md](https://github.com/8kb/modelcore/blob/main/AGENTS.md) and
+  [docs/architecture.md](docs/architecture.md#no-derivation-rules-not-just-no-depth-dial).
 - **Optimizer state is checkpointed and reloaded positionally** — the role-order
   `ModelManager.create_optimizer` builds internally is part of the on-disk format; never
   reconstruct a param-group list by hand.
@@ -41,8 +49,7 @@ anywhere.)
   separate from nanochat's, even though the ported tokenizer produces identical token ids. A
   prepared dataset, checkpoint, or downloaded shard from one is never read by the other.
 - **An unrecognized job-file key is a hard error, with a close-match suggestion when there is
-  one** — including inside a `"model"` block, not just at a step's top level. `prepare`/`train`/
-  `bench` each accept a different key set depending on their step's own `"kind"`/`"suite"` (see
+  one.** `prepare`/`train`/`bench` each accept a different key set depending on their step's own `"kind"`/`"suite"` (see
   each module's `accepted_keys(cfg)`), so a key that's real for one kind but nonsensical for
   another is also caught, not silently ignored. See `docs/job-file.md` for the full reference and
   `tests/test_docs.py` for the guard keeping it accurate.
@@ -67,11 +74,22 @@ anywhere.)
   few-shot examples concatenated) can run past 2,000 tokens; modelcore's rotary embedding cache is
   sized at `sequence_len * 10` when the model is built, and exceeding it is a hard error, not a
   truncation. `jobs/smoke.json` trains at `sequence_len: 2048` for exactly this reason, even
-  though the model itself is tiny (`depth: 4`).
+  though the model itself is tiny (`configs/gpt_d4.json`, a 4-layer tree).
 - **`train`'s own forward/backward loop is eager — no `torch.compile`.** This keeps a job's very
   first step from being the one that first triggers a cold compiled-kernel cache on whatever
   backend it's running on. `modelcore.optim.MuonAdamW.step` is compiled regardless, internally —
   tinylab's own loop doesn't control or opt out of that. See `docs/architecture.md`.
+- **`train` never warm-starts its optimizer** — every step builds a fresh one
+  (`ModelManager.create_optimizer`), unlike nanochat's `chat_sft.py --load-optimizer`. This is why
+  attaching an adapter via a `kind: sft` step's `"model_config"` override needs no
+  matching guard here: nanochat forces `--load-optimizer` off for `--adapters` because a frozen
+  base's param groups are shaped completely differently from a fully-trainable one, and loading a
+  pretrained optimizer shard into that layout would corrupt momentum state — a failure mode that
+  simply can't occur when there's no warm-start to begin with.
+- **A `train` step's `"world_size"` is checked against the actual launch, not derived from it.**
+  The job file fixes the GPU count a run assumes (`total_batch_size`/grad-accum arithmetic depends
+  on it); a mismatched `torchrun --nproc_per_node` is a hard error, not a silently different
+  effective batch size. Edit the job file when the GPU configuration changes.
 
 ## Testing
 

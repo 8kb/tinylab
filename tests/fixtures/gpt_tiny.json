@@ -1,0 +1,58 @@
+{
+  "format": "modelcore.v1",
+  "sequence_len": 32,
+  "vocab_size": 32768,
+  "n_embd": 64,
+  "pad_vocab_size_to": 64,
+  "reference": {
+    "preset": "gpt",
+    "kwargs": {
+      "aspect_ratio": 32,
+      "head_dim": 16,
+      "max_seq_len": 32,
+      "vocab_size": 32768,
+      "window_pattern": "SSSL"
+    }
+  },
+  "shared": {
+    "rope": {
+      "#type": "rotary",
+      "head_dim": 16
+    }
+  },
+  "input": {
+    "#type": "token_embedding",
+    "smear": true
+  },
+  "body": {
+    "#type": "backout",
+    "backout_layer": 1,
+    "backout_lambda_init": 0.2,
+    "blocks": [
+      {
+        "#type": "gpt_block",
+        "layer_idx": 0,
+        "n_head": 4,
+        "n_kv_head": 4,
+        "window": 128,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.15,
+        "x0_lambda_init": 0.2
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 1,
+        "n_head": 4,
+        "n_kv_head": 4,
+        "window": 32,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.0499999999999998,
+        "x0_lambda_init": 0.05000000000000002
+      }
+    ]
+  },
+  "output": {
+    "#type": "lm_head",
+    "softcap": 15
+  }
+}

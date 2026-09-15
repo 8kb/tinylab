@@ -1,0 +1,238 @@
+{
+  "format": "modelcore.v1",
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_embd": 1280,
+  "pad_vocab_size_to": 64,
+  "reference": {
+    "preset": "gpt",
+    "kwargs": {
+      "aspect_ratio": 64,
+      "head_dim": 128,
+      "max_seq_len": 2048,
+      "vocab_size": 32768,
+      "window_pattern": "SSSL"
+    }
+  },
+  "shared": {
+    "rope": {
+      "#type": "rotary",
+      "head_dim": 128
+    }
+  },
+  "input": {
+    "#type": "token_embedding",
+    "smear": true
+  },
+  "body": {
+    "#type": "backout",
+    "backout_layer": 10,
+    "backout_lambda_init": 0.2,
+    "blocks": [
+      {
+        "#type": "gpt_block",
+        "layer_idx": 0,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.15,
+        "x0_lambda_init": 0.2
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 1,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.144736842105263,
+        "x0_lambda_init": 0.19210526315789475
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 2,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.1394736842105262,
+        "x0_lambda_init": 0.1842105263157895
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 3,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 2048,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.1342105263157893,
+        "x0_lambda_init": 0.17631578947368423
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 4,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.1289473684210525,
+        "x0_lambda_init": 0.16842105263157897
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 5,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.1236842105263156,
+        "x0_lambda_init": 0.16052631578947368
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 6,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.1184210526315788,
+        "x0_lambda_init": 0.15263157894736845
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 7,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 2048,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.1131578947368421,
+        "x0_lambda_init": 0.14473684210526316
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 8,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.1078947368421053,
+        "x0_lambda_init": 0.1368421052631579
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 9,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.1026315789473684,
+        "x0_lambda_init": 0.12894736842105264
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 10,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.0973684210526315,
+        "x0_lambda_init": 0.12105263157894738
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 11,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 2048,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.0921052631578947,
+        "x0_lambda_init": 0.11315789473684212
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 12,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.0868421052631578,
+        "x0_lambda_init": 0.10526315789473686
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 13,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.081578947368421,
+        "x0_lambda_init": 0.09736842105263159
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 14,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.0763157894736841,
+        "x0_lambda_init": 0.08947368421052632
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 15,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 2048,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.0710526315789473,
+        "x0_lambda_init": 0.08157894736842107
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 16,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.0657894736842104,
+        "x0_lambda_init": 0.0736842105263158
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 17,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.0605263157894735,
+        "x0_lambda_init": 0.06578947368421054
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 18,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 512,
+        "has_value_embed": false,
+        "resid_lambda_init": 1.0552631578947367,
+        "x0_lambda_init": 0.05789473684210528
+      },
+      {
+        "#type": "gpt_block",
+        "layer_idx": 19,
+        "n_head": 10,
+        "n_kv_head": 10,
+        "window": 2048,
+        "has_value_embed": true,
+        "resid_lambda_init": 1.0499999999999998,
+        "x0_lambda_init": 0.05000000000000002
+      }
+    ]
+  },
+  "output": {
+    "#type": "lm_head",
+    "softcap": 15
+  }
+}

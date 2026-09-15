@@ -1,0 +1,145 @@
+{
+  "format": "modelcore.v1",
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_embd": 768,
+  "pad_vocab_size_to": 64,
+  "reference": {
+    "preset": "llama_kvshare_win",
+    "kwargs": {
+      "aspect_ratio": 64,
+      "head_dim": 128,
+      "max_seq_len": 2048,
+      "vocab_size": 32768,
+      "window_pattern": "SSSL",
+      "kv_share_frac": 0.5
+    }
+  },
+  "shared": {
+    "rope": {
+      "#type": "rotary",
+      "head_dim": 128
+    }
+  },
+  "input": {
+    "#type": "token_embedding",
+    "smear": false
+  },
+  "body": {
+    "#type": "stack",
+    "blocks": [
+      {
+        "#type": "plain_block",
+        "layer_idx": 0,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 0,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 1,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 1,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 2,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 2,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 3,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 2048,
+        "kv_slot": 3,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 4,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 4,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 5,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 5,
+        "produces_kv": true
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 6,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 5,
+        "produces_kv": false
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 7,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 2048,
+        "kv_slot": 5,
+        "produces_kv": false
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 8,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 5,
+        "produces_kv": false
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 9,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 5,
+        "produces_kv": false
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 10,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 512,
+        "kv_slot": 5,
+        "produces_kv": false
+      },
+      {
+        "#type": "plain_block",
+        "layer_idx": 11,
+        "n_head": 6,
+        "n_kv_head": 6,
+        "window": 2048,
+        "kv_slot": 5,
+        "produces_kv": false
+      }
+    ]
+  },
+  "output": {
+    "#type": "lm_head",
+    "softcap": 15
+  }
+}
