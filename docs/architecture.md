@@ -17,10 +17,11 @@ tinylab/
   chat.py                 the `chat` CLI command
   data.py                 corpus identity: ClimbMix shard URLs, SmolTalk
   ops/
-    __init__.py            OPS registry + Context (device/managers, passed explicitly)
+    __init__.py            OPS registry + Context (device/managers, resume flag, passed explicitly)
     prepare.py              op: prepare
     train.py                op: train (kind base|sft, one shared loop)
     bench.py                op: bench (suite core|chat)
+    tokenizer.py             op: tokenizer -- trains a fresh BPE vocab
 jobs/
   smoke.json              tiny end-to-end pipeline, runs on a laptop in minutes
   speedrun.json            real-scale template for a multi-GPU pod
@@ -33,9 +34,10 @@ jobs/
 
 ```
 __main__.main()
-  -> job.run_file(path, only=..., dry_run=...)
+  -> job.run_file(path, only=..., dry_run=..., resume=...)
        -> job.load(path)                 # parse JSON, check top-level keys
        -> job.resolve_steps(job, only)   # deep-merge defaults, validate each step's keys
+       -> [job state file dance -- see "Resume: the job state file" below]
        -> for each step: OPS[step["op"]].run(step, ctx)
 ```
 
@@ -51,6 +53,69 @@ shape, but is never reachable through `OPS` — it's a separate CLI command (`py
 chat <job.json>`), not a pipeline step. A pipeline step runs to completion unattended; a REPL
 blocks on a human at a prompt, so it can't be one.
 
+## Resume: the job state file
+
+`--resume` is a CLI flag (`run_file`'s `resume` param), never a job-file key — whether a given
+invocation is a fresh start or a continuation is a fact about the invocation, not the pipeline (see
+`job.py`'s own module docstring). It drives two independent things, both backed by one job state
+file under `<base_dir>/job_state/` (named from the job file's own path, so two different job files
+never collide):
+
+- **Pipeline-level: skip whichever steps already completed.** A real (`not dry_run`), full-pipeline
+  (`only is None`) run tracks, per step, `{"status": "done"}` once that step's `run()` returns
+  without raising — a later `--resume` skips it outright. Starting a job whose state file already
+  exists *without* `--resume` is a hard, immediate `JobError` — a previous run may still be alive,
+  or died without cleanup — pointing at `--resume` (to continue) or deleting the state file (to
+  force a fresh start). `--resume` with no state file present is a no-op (an ordinary fresh run),
+  so it's safe to pass unconditionally from an unattended restart script. `--only` bypasses this
+  entire mechanism — a deliberate single-step override never touches the state file, even while
+  one from a previous full-pipeline run exists.
+- **Step-level: a `train` step continues its own interrupted run — from a checkpoint the state
+  file itself confirms, not a directory guess.** `Context.resume` (set from the same flag) reaches
+  every op; `ops/train.py`'s `run()` checks it first, before its usual kind-specific fresh-start
+  path. Whenever a periodic checkpoint's save (model + optimizer + meta, every rank) fully returns,
+  `ctx.record_checkpoint(step_name, step)` records `{"status": "in_progress", "checkpoint_step":
+  step}` for that step — *before* `--resume` is even a question, this is what makes resume possible
+  at all. On `--resume`, `ops/train.py` asks `ctx.resume_checkpoint_step(step_name)` for that exact
+  value and loads precisely that checkpoint — it never scans the checkpoint directory and guesses
+  the highest step number, because a directory scan can't tell a fully-written checkpoint from one
+  that started writing and crashed mid-`torch.save` (still matches the `model_<step>.pt` naming
+  pattern, so a scan would happily pick it and then fail to load, even with a perfectly good,
+  slightly older checkpoint sitting right next to it). The directory scan
+  (`checkpoints.find_last_step`) is only a fallback, for a call not driven through `job.run_file`
+  at all (a bare `Context`, as this repo's own tests use) — that path has no state file to consult
+  and keeps today's best-effort behavior. Either way, resume only has something to continue from if
+  the step had already taken at least one periodic checkpoint (`"save_every"`, see
+  `docs/job-file.md`) — without one, the step just restarts, which is the best any resume can do. A
+  `world_size` mismatch against the checkpoint's own recorded value is a hard error (`MuonAdamW`'s
+  optimizer state doesn't reshard across `world_size` — see `TODO.md`), and so is a missing
+  optimizer shard for this rank; resume never silently falls back to a fresh optimizer.
+
+### The state file's own crash-safety
+
+The state file update above — after every periodic checkpoint, and after every whole step — has to
+survive a crash *during its own write*, or the fix just moves the corruption problem one file over.
+Every write (`job._write_state`) goes through: serialize the new content to a temp file, `flush()` +
+`os.fsync()` it (durable on disk before anything else happens), delete the previous `.old`
+generation if one exists, atomically rename the current file to `.old` (`os.replace`, which works
+identically on POSIX and Windows, unlike bare `os.rename`), then atomically rename the temp file to
+current. A crash at any point in that sequence leaves either the untouched previous file or the
+untouched, already-durable `.old` readable — never a torn write, regardless of how reliable the
+filesystem's rename semantics actually are (matters on network/overlay storage, which a GPU pod's
+mount can be). Reading (`job._read_state`) tries the current file first, falls back to `.old` if
+the current one is missing or fails to parse, and returns `None` (treated as "nothing to resume
+from", not an error) if neither is usable. A monotonic `"counter"` field increments on every write,
+mainly so a human inspecting the file by hand can tell at a glance whether `.old` is one generation
+behind or something's actually gone wrong — the rotation order alone already guarantees which file
+is newer, no comparison needed for the read logic itself.
+
+**What this does not cover**: `modelcore.store.FileSystemStore`'s own writes (the actual
+`model_<step>.pt`/`optim_<step>_rank<r>.pt`/`meta_<step>.json` files) are not atomic — a separate
+repo, its own versioning discipline, out of scope here. The state file mechanism above closes the
+gap for *knowing which checkpoint step to trust*; it doesn't make an individual checkpoint file's
+own write crash-safe. A directory-scan-only resume (the no-state-file fallback path) is still
+exposed to that gap.
+
 ## `Context`
 
 `tinylab.ops.Context` carries the device, rank/world_size, and lazily-built `ModelManager`/
@@ -59,7 +124,9 @@ blocks on a human at a prompt, so it can't be one.
 matching the subsystems' own no-ambient-globals rule (see
 [`llmllab/docs/subsystem-conventions.md`](../../llmllab/docs/subsystem-conventions.md), which
 resolves in a local checkout of the whole family). This is what lets a
-multi-step job share one device/process-group setup instead of re-initializing it per step.
+multi-step job share one device/process-group setup instead of re-initializing it per step. It also
+carries the resume hooks (`resume_checkpoint_step`/`record_checkpoint`) `job.run_file` wires up to
+the job state file — see "Resume: the job state file" above.
 
 ## Where each subsystem's boundary sits
 
@@ -89,17 +156,22 @@ with a compatible tokenizer.
 
 ```
 <base_dir>/
-  tokenizer/                 tokenizer.pkl (+ token_bytes.pt), copied from the bundled default on first use
+  tokenizer/                 tokenizer.pkl (+ token_bytes.pt), copied from the bundled default on
+                             first use, or written by a "tokenizer" step
   base_data_climbmix/        downloaded ClimbMix parquet shards
   prepared/<dataset_name>/   a datacore dataset: packed sequences + manifest
-  base_checkpoints/<tag>/    model_<step>.pt, meta_<step>.json, config_<step>.json, optim_<step>_rank<r>.pt
+  base_checkpoints/<tag>/    model_<step>.pt, meta_<step>.json (its own "model_config" key holds
+                             the tree -- there is no separate config_<step>.json file),
+                             optim_<step>_rank<r>.pt; multiple steps coexist with no pruning
   chatsft_checkpoints/<tag>/ same shape, for SFT checkpoints
+  job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
 ```
 
-`meta_<step>.json` carries: `step`, `val_bpb`, `tokenizer_fingerprint`, `user_config` (the resolved
-job-file step, minus `"model_config"` — that's already captured in `config_<step>.json`), `device_batch_size`,
-`max_seq_len`, `total_batch_size`, `dataloader_state_dict` (for exact-resume of the data reader,
-though tinylab itself has no `--resume` flag today), `total_training_time`, and for SFT checkpoints,
+`meta_<step>.json` carries: `step`, `val_bpb`, `tokenizer_fingerprint`, `model_config` (the
+materialized tree this checkpoint was built from), `user_config` (the resolved job-file step, minus
+`"model_config"` — that would just duplicate the sibling `model_config` key under a different,
+unresolved shape), `device_batch_size`, `max_seq_len`, `total_batch_size`, `dataloader_state_dict`
+(a datacore resume cursor -- see "Resume" above), `total_training_time`, and for SFT checkpoints,
 `base_model_tag`/`base_model_step`. `tinylab.checkpoints.build_model` cross-checks
 `tokenizer_fingerprint` against the currently-loaded tokenizer before returning a model — a vocab-
 size match alone isn't enough to prove two tokenizers assign ids the same way.
@@ -128,11 +200,12 @@ are concrete values, not rules, and stay.
 
 ## What tinylab deliberately doesn't do
 
-tinylab is the minimal host: one job file, four things it can do. Relative to `nanochat` (the
+tinylab is the minimal host: one job file, five things it can do. Relative to `nanochat` (the
 architecture-playground host built on the same three subsystems), tinylab now has fp8, doc-masking,
-and LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
-adapter-override keys), but still no wandb logging, no fp16 `GradScaler`, no `--resume-from-step`,
-no mid-training CORE/sample eval (only a final save), no periodic checkpointing, and no
+LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
+adapter-override keys), periodic checkpointing and resume (`"save_every"`, `--resume` — see
+"Resume: the job state file" above), and tokenizer training (the `tokenizer` op), but still no wandb
+logging, no fp16 `GradScaler`, no mid-training CORE/sample eval (only periodic val-bpb), and no
 `torch.compile` in its own training loop (see "Why the training loop is eager" below). None of
 these are bugs — they're `nanochat`'s job, not tinylab's; adding one back means porting it the same
 way everything else here was ported, not inventing it fresh.
@@ -151,8 +224,11 @@ though:
   Run nanochat's `scripts/model_info.py --json` per architecture before spending.
 - **No results aggregation.** Each op returns a dict `job.run_file` prints as one JSON line; there
   is no `results.csv`, no joined comparison table.
-- **No skip-if-done resume.** `contest.sh` greps its CSV to skip finished rows after an
-  interruption; tinylab's only re-run granularity is `--only <step>`, one step at a time.
+
+`--resume` (see "Resume: the job state file" above) does cover skip-if-done at the step level now —
+close to what `contest.sh`'s CSV-grep achieves, though `contest.sh` skips finished *architecture
+rows* (a coarser unit than tinylab's individual steps) and additionally resumes a `train` step's
+own interrupted training loop, not just whole-step granularity.
 
 ## Why the training loop is eager
 
@@ -165,11 +241,13 @@ invariant owned by modelcore, not something tinylab's own loop controls or can o
 ## Where things come from
 
 `tokenizer.py`, `checkpoints.py`, `engine.py`, `chat.py`, `data.py`, `runtime.py`, and
-`ops/{prepare,train,bench}.py` are each ported from a corresponding file in
+`ops/{prepare,train,bench,tokenizer}.py` are each ported from a corresponding file in
 [`nanochat`](https://github.com/8kb/nanochat) (see each module's own docstring for exactly which
 one) and trimmed to what a job-file-driven pipeline needs — `nanochat` is a virtual uv project (no
 `[build-system]`) and can't be a real dependency, so this is a port, not an import.
 `tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping in.
+`tokenizer.py`'s `train_from_iterator`/`save` (via `ops/tokenizer.py`) are the one place this repo
+now depends on `rustbpe` directly, same as nanochat's own `scripts/tok_train.py` does.
 
 Several pieces that started as ports (byte-identical copies of nanochat code, since neither host
 could depend on the other) have since moved into the subsystems all three repos already share,

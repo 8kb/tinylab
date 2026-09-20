@@ -2,6 +2,8 @@
 --dry-run, and that a "chat" block is never dispatched as a step."""
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -189,6 +191,216 @@ def test_dry_run_touches_nothing_and_returns_resolved_configs(tmp_path, monkeypa
     # A real (non-dry-run) op would create TINYLAB_BASE_DIR the moment anything calls
     # get_base_dir(); --dry-run must return before that ever happens.
     assert not base_dir.exists()
+
+
+def test_resume_skips_completed_steps_after_a_crash(tmp_path, base_dir, monkeypatch):
+    """A 3-step job where the second step raises: run once (crashes, the job state file records
+    step 'a' as done); a second attempt without resume=True must refuse to start; a third attempt
+    with resume=True must skip 'a' (never call its run again), retry 'b', then run 'c', and clean
+    up the state file on success.
+
+    _pid_alive is stubbed to False throughout -- this test simulates a crash by having a step
+    raise and then calling job.run_file again from this *same* still-running test process, so the
+    state file's recorded pid (this process's own) would otherwise look genuinely alive. That
+    liveness check is exercised for real, separately, in test_resume_refuses_when_recorded_pid_is_
+    still_alive/test_resume_proceeds_when_recorded_pid_is_dead below."""
+    monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
+    doc = {"steps": [
+        {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
+        {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
+        {"name": "c", "op": "prepare", "kind": "base", "sequence_len": 8},
+    ]}
+    path = _write_job(tmp_path, doc)
+
+    calls = []
+
+    def failing_run(cfg, ctx):
+        calls.append(cfg["name"])
+        if cfg["name"] == "b":
+            raise RuntimeError("simulated crash")
+        return {"op": "prepare"}
+
+    monkeypatch.setattr("tinylab.ops.prepare.run", failing_run)
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        job.run_file(path)
+    assert calls == ["a", "b"]
+
+    # A ".old" generation is expected here (two writes have happened: the initial empty one, then
+    # "a" done) -- normal 2-generation rotation, not stray state.
+    state_dir = os.path.join(base_dir, "job_state")
+    state_path = os.path.join(state_dir, [f for f in os.listdir(state_dir) if f.endswith(".json")][0])
+    assert job._read_state(state_path)["steps"] == {"a": {"status": "done"}}
+
+    calls.clear()
+    with pytest.raises(job.JobError, match="already exists"):
+        job.run_file(path)
+    assert calls == []  # nothing ran -- refused before touching any step
+
+    def succeeding_run(cfg, ctx):
+        calls.append(cfg["name"])
+        return {"op": "prepare"}
+
+    monkeypatch.setattr("tinylab.ops.prepare.run", succeeding_run)
+    results = job.run_file(path, resume=True)
+    assert calls == ["b", "c"]  # "a" skipped -- already completed
+    assert len(results) == 2  # only steps actually run this invocation
+    assert not os.listdir(state_dir)  # state file (and any .old/.tmp) removed on clean completion
+
+
+def test_resume_with_no_state_file_is_a_normal_fresh_run(tmp_path, base_dir, monkeypatch):
+    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    path = _write_job(tmp_path, doc)
+    monkeypatch.setattr("tinylab.ops.prepare.run", lambda cfg, ctx: {"op": "prepare"})
+    results = job.run_file(path, resume=True)
+    assert len(results) == 1
+    assert not os.listdir(os.path.join(base_dir, "job_state"))
+
+
+def test_only_bypasses_the_state_file_mechanism_entirely(tmp_path, base_dir, monkeypatch):
+    """--only is a deliberate single-step override -- it must never touch the job state file, so
+    it keeps working even while a previous full-pipeline run's state file still exists."""
+    doc = {"steps": [
+        {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
+        {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
+    ]}
+    path = _write_job(tmp_path, doc)
+    monkeypatch.setattr("tinylab.ops.prepare.run", lambda cfg, ctx: {"op": "prepare"})
+
+    state_dir = os.path.join(base_dir, "job_state")
+    os.makedirs(state_dir, exist_ok=True)
+    with open(os.path.join(state_dir, "stale.json"), "w") as f:
+        f.write("{}")
+
+    results = job.run_file(path, only="b")
+    assert len(results) == 1
+    assert os.listdir(state_dir) == ["stale.json"]  # untouched, not removed
+
+
+def test_write_state_and_read_state_round_trip(tmp_path):
+    path = str(tmp_path / "job.json")
+    written = job._write_state(path, {"steps": {"a": {"status": "done"}}})
+    assert written["counter"] == 1
+    assert job._read_state(path) == written
+
+    written2 = job._write_state(path, dict(written, steps={"a": {"status": "done"}, "b": {"status": "done"}}))
+    assert written2["counter"] == 2  # monotonic across writes
+    assert job._read_state(path) == written2
+    assert os.path.exists(path + ".old")  # previous generation kept
+
+
+def test_read_state_falls_back_to_old_generation_when_current_is_corrupt(tmp_path, capsys):
+    path = str(tmp_path / "job.json")
+    job._write_state(path, {"steps": {"a": {"status": "done"}}})
+    job._write_state(path, {"steps": {"a": {"status": "done"}, "b": {"status": "done"}}})
+    # Simulate a crash mid-write: the current generation is truncated/corrupt, but .old (written
+    # by the first call, fully durable) must still be there and still be trusted.
+    with open(path, "w") as f:
+        f.write("{not valid json")
+    recovered = job._read_state(path)
+    assert recovered is not None
+    assert recovered["steps"] == {"a": {"status": "done"}}  # the .old generation, not the corrupt one
+    assert "previous generation" in capsys.readouterr().out  # warned, not silent
+
+
+def test_read_state_falls_back_to_old_generation_when_current_is_simply_absent(tmp_path, capsys):
+    """The other way a crash can leave only ".old" around: it died between demoting the old
+    current file to ".old" and promoting the temp file to current, so "current" doesn't exist at
+    all (not even truncated) -- must be treated identically to "current is corrupt", not as
+    "nothing here"."""
+    path = str(tmp_path / "job.json")
+    job._write_state(path, {"steps": {"a": {"status": "done"}}})
+    job._write_state(path, {"steps": {"a": {"status": "done"}, "b": {"status": "done"}}})
+    os.remove(path)
+    assert job._state_exists(path)  # still detected as "a previous attempt happened"
+    recovered = job._read_state(path)
+    assert recovered is not None
+    assert recovered["steps"] == {"a": {"status": "done"}}
+    assert "previous generation" in capsys.readouterr().out
+
+
+def test_read_state_returns_none_when_both_generations_are_unusable(tmp_path, capsys):
+    path = str(tmp_path / "job.json")
+    job._write_state(path, {"steps": {"a": {"status": "done"}}})
+    with open(path, "w") as f:
+        f.write("{not valid json")
+    with open(path + ".old", "w") as f:
+        f.write("{also not valid")
+    assert job._read_state(path) is None
+    assert "fresh start" in capsys.readouterr().out  # warned, not silent
+
+
+def test_pid_alive_true_for_the_current_process_false_for_a_dead_one():
+    assert job._pid_alive(os.getpid()) is True
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert job._pid_alive(proc.pid) is False
+    assert job._pid_alive(None) is False
+    assert job._pid_alive("not-a-pid") is False
+
+
+def test_resume_refuses_when_recorded_pid_is_still_alive(tmp_path, base_dir):
+    """A still-alive recorded pid is refused even with resume=True -- it means a genuinely
+    concurrent run, not a crashed one, and racing two processes on the same checkpoint files
+    would be real corruption."""
+    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    path = _write_job(tmp_path, doc)
+    state_path = job._state_path(path)
+    job._write_state(state_path, {"job_path": path, "pid": os.getpid(), "steps": {}})
+
+    with pytest.raises(job.JobError, match="still appears to be running"):
+        job.run_file(path, resume=True)
+    with pytest.raises(job.JobError, match="still appears to be running"):
+        job.run_file(path)  # same refusal without --resume too
+
+
+def test_resume_proceeds_when_recorded_pid_is_dead(tmp_path, base_dir, monkeypatch):
+    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    path = _write_job(tmp_path, doc)
+    state_path = job._state_path(path)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    job._write_state(state_path, {"job_path": path, "pid": proc.pid, "steps": {"a": {"status": "done"}}})
+
+    monkeypatch.setattr("tinylab.ops.prepare.run", lambda cfg, ctx: {"op": "prepare"})
+    results = job.run_file(path, resume=True)
+    assert results == []  # "a" was already recorded done -- correctly skipped, not re-run
+
+
+def test_train_step_records_progress_and_resume_passes_it_as_a_hint(tmp_path, base_dir, monkeypatch):
+    """A fake "train"-shaped op that calls ctx.record_checkpoint mid-run, then crashes: the job
+    state file must record it as "in_progress" with the reported checkpoint_step, and a resumed
+    run must see that exact value via ctx.resume_checkpoint_step -- the same channel
+    tinylab.ops.train's own resume detection reads from. _pid_alive stubbed False for the same
+    reason as test_resume_skips_completed_steps_after_a_crash above."""
+    monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
+    doc = {"steps": [{"name": "pre", "op": "train", "kind": "base", "sequence_len": 8,
+                       "model_config": "cfg.json", "total_batch_size": 1, "world_size": 1,
+                       "eval_tokens": 1, "num_iterations": 1}]}
+    # model_config must exist on disk -- resolve_steps checks it, even though this fake op never
+    # reads it.
+    (tmp_path / "cfg.json").write_text("{}")
+    path = _write_job(tmp_path, doc)
+
+    seen_hints = []
+
+    def fake_train_run(cfg, ctx):
+        seen_hints.append(ctx.resume_checkpoint_step(cfg["name"]))
+        ctx.record_checkpoint(cfg["name"], 3)
+        raise RuntimeError("simulated crash after one checkpoint")
+
+    monkeypatch.setattr("tinylab.ops.train.run", fake_train_run)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        job.run_file(path)
+    assert seen_hints == [None]  # nothing to resume from yet, first attempt
+
+    state_dir = os.path.join(base_dir, "job_state")
+    state_path = os.path.join(state_dir, [f for f in os.listdir(state_dir) if f.endswith(".json")][0])
+    assert job._read_state(state_path)["steps"] == {"pre": {"status": "in_progress", "checkpoint_step": 3}}
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        job.run_file(path, resume=True)
+    assert seen_hints == [None, 3]  # second attempt sees the recorded checkpoint step
 
 
 def test_device_propagates_to_every_op_not_just_chat(tmp_path, monkeypatch):

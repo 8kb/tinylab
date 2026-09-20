@@ -8,15 +8,20 @@ disagree.
 
 A key starting with `_` (e.g. `"_comment"`, `"_note"`) is a freeform comment, ignored everywhere.
 
+`--resume` is the one exception to "everything is a JSON key" — it's a CLI flag
+(`python -m tinylab job.json --resume`), not a job-file key, since whether a given invocation is a
+fresh start or a continuation is a fact about the invocation, not the pipeline. See
+`docs/architecture.md`'s "Resume: the job state file" section for the mechanism.
+
 ## Top level
 
 | Key | Meaning |
 |---|---|
 | `defaults` | Deep-merged into every step and into `chat` (a step's own keys win; nested dicts merge, everything else is replaced wholesale). |
-| `steps` | An ordered list of pipeline steps. Required. Each needs its own `name` (unique) and `op` (`prepare`/`train`/`bench`). |
+| `steps` | An ordered list of pipeline steps. Required. Each needs its own `name` (unique) and `op` (`prepare`/`train`/`bench`/`tokenizer`). |
 | `chat` | The block `python -m tinylab chat` reads. Optional — omit it if this job file has nothing to chat with. |
 
-## Common to every op (`prepare`/`train`/`bench`)
+## Common to every op (`prepare`/`train`/`bench`/`tokenizer`)
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -51,6 +56,11 @@ One loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (
 `total_batch_size`, `eval_tokens`; `base` also requires `model_config` and `num_iterations`; `sft`
 also requires `source_tag`.
 
+Launched with `--resume`, a step first checks whether it already has a checkpoint of its own
+(under `output_tag`) and, if so, continues training from it — model, optimizer state, and
+dataloader position all restored, `model_config`/`source_tag` not re-read. See
+`docs/architecture.md`'s "Resume: the job state file" section.
+
 tinylab derives no training-horizon or batch-size scaling law of its own — nanochat's
 `target_flops`/`target_param_data_ratio` math (muP batch-size and weight-decay corrections
 included) lives only in `modelcore.scaling`, for nanochat's own use. Compute `total_batch_size`/
@@ -77,6 +87,7 @@ AGENTS.md.
 | `muon_momentum_warmup_steps` | Steps Muon's own momentum ramps over before holding at 0.97. | `400` (`modelcore.optim.schedules.muon_momentum`'s own default) | both |
 | `eval_every` | Run a val-bpb pass every N steps (plus always at the final step). `0` disables eval entirely, including at the final step. | `50` | both |
 | `eval_tokens` | Tokens to evaluate per val pass. | required | both |
+| `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `-1` disables periodic saving (today's behavior: final step only). No pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows disk usage without bound. | `-1` | both |
 | `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`; needs an H100+ GPU). | `false` | both |
 | `fp8_recipe` | FP8 scaling recipe (only `"tensorwise"` is implemented). | `"tensorwise"` | both |
 | `fp8_eval` | When `fp8` is on, measure val bpb directly in fp8 (`true`) instead of converting back to bf16 first (`false`). Irrelevant without `fp8`. | `true` | both |
@@ -87,6 +98,21 @@ AGENTS.md.
 | `source` | Checkpoint namespace to read the starting weights from (`"base"` or `"sft"`). | `"base"` | sft |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |
+
+## `tokenizer`
+
+Trains a fresh BPE vocab and writes it to `<base_dir>/tokenizer/`, overwriting whatever was there
+(the bundled default, or an earlier trained one) — no skip-if-exists guard. Most job files never
+need this: tinylab ships a committed default vocab. If used, put it first in `"steps"` — it must
+run before any earlier step has already read `ctx.tokenizer` (lazily loaded and cached on first
+use). No required keys; every default below matches nanochat's own `scripts/tok_train.py`.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `shards` | Number of ClimbMix train shards to download and read (plus the fixed validation shard) — same corpus `prepare`'s `kind: base` uses. | `8` |
+| `vocab_size` | Target vocab size, including the 9 special tokens (appended after training, never trained themselves). Must leave at least 256 ordinary tokens. | `32768` |
+| `doc_cap` | Truncates any single document to this many characters before it reaches the trainer. | `10000` |
+| `max_chars` | Stops reading once this many characters (post-`doc_cap`) have been seen. | `2000000000` |
 
 ## `bench`
 

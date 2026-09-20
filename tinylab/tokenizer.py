@@ -1,10 +1,9 @@
 """
 BPE tokenizer, ported from nanochat's nanochat/tokenizer.py so tinylab produces identical token
 ids without depending on nanochat itself -- see AGENTS.md for why it can't be a real dependency.
-Inference-only: tinylab ships a committed vocab (default_tokenizer/) and has no `tok_train` op, so
-the rustbpe-based training path is dropped -- kept: encode/decode, the special-token and
-byte-length helpers evaluate_bpb needs, and the two conversation-rendering entry points (chat SFT
-data prep, benchcore's generative eval).
+tinylab ships a committed default vocab (default_tokenizer/), so most job files never need to
+train their own -- but tinylab.ops.tokenizer's `tokenizer` op can, via train_from_iterator/save
+below (rustbpe + tiktoken, same as nanochat's own scripts/tok_train.py).
 """
 import copy
 import hashlib
@@ -12,6 +11,8 @@ import os
 import pickle
 import shutil
 from importlib import resources
+
+import tiktoken
 
 # Documents the special tokens baked into default_tokenizer/tokenizer.pkl -- not read at runtime
 # (encode_special looks them up by string literal against the loaded tiktoken.Encoding directly),
@@ -33,11 +34,19 @@ SPECIAL_TOKENS = [
 # rather than two independent copies of the same number.
 DEFAULT_MAX_TOKENS_PER_CONVERSATION = 2048
 
+# tiktoken's own splitting regex, used only by train_from_iterator (a trained vocab's mergeable
+# ranks bake in whatever pattern trained them; a *loaded* tokenizer's pat_str is already fixed).
+# Deviates from GPT-4 in using \p{N}{1,2} instead of \p{N}{1,3} -- nanochat's own comment: "I
+# didn't want to 'waste' too many tokens on numbers for smaller vocab sizes. I verified that 2 is
+# the sweet spot for vocab size of 32K." Byte-identical to nanochat's own SPLIT_PATTERN, so a
+# tokenizer retrained here on the same corpus reproduces nanochat's own token ids exactly.
+SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
+
 
 class RustBPETokenizer:
-    """Light wrapper around tiktoken. The vocab itself is trained once, offline (see nanochat's
-    own tok_train.py, since tinylab has no equivalent) and loaded from a pickled tiktoken.Encoding
-    -- see from_directory / get_tokenizer below."""
+    """Light wrapper around tiktoken (for efficient inference), trained with rustbpe. The bundled
+    default vocab (default_tokenizer/) covers most use -- see from_directory / get_tokenizer below
+    for loading it, train_from_iterator / save for training a new one."""
 
     def __init__(self, enc, bos_token):
         self.enc = enc
@@ -50,6 +59,40 @@ class RustBPETokenizer:
         with open(pickle_path, "rb") as f:
             enc = pickle.load(f)
         return cls(enc, "<|bos|>")
+
+    @classmethod
+    def train_from_iterator(cls, text_iterator, vocab_size):
+        """Trains a fresh vocab on text_iterator's documents -- ported from nanochat's
+        nanochat/tokenizer.py's classmethod of the same name (rustbpe does the actual BPE merges;
+        this wraps the result in a tiktoken.Encoding for fast inference). SPECIAL_TOKENS are never
+        trained -- rustbpe only ever sees vocab_size - len(SPECIAL_TOKENS) ordinary tokens, and the
+        specials are appended afterward in their fixed list order, so their ids are always the
+        highest len(SPECIAL_TOKENS) ids in the vocab (e.g. "<|bos|>" = vocab_size - 9 by default).
+        Imports rustbpe lazily: it's a training-only dependency, and tinylab.tokenizer is imported
+        unconditionally by nearly everything, most of which never trains a tokenizer at all."""
+        import rustbpe
+        tokenizer = rustbpe.Tokenizer()
+        vocab_size_no_special = vocab_size - len(SPECIAL_TOKENS)
+        assert vocab_size_no_special >= 256, f"vocab_size_no_special must be at least 256, got {vocab_size_no_special}"
+        tokenizer.train_from_iterator(text_iterator, vocab_size_no_special, pattern=SPLIT_PATTERN)
+        mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
+        tokens_offset = len(mergeable_ranks)
+        special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
+        enc = tiktoken.Encoding(
+            name="rustbpe", pat_str=tokenizer.get_pattern(),
+            mergeable_ranks=mergeable_ranks, special_tokens=special_tokens,
+        )
+        return cls(enc, "<|bos|>")
+
+    def save(self, tokenizer_dir):
+        """The from_directory-loadable half of train_from_iterator's output -- only self.enc (the
+        tiktoken.Encoding) is pickled, same as nanochat's own save(). Doesn't write token_bytes.pt
+        -- that's tinylab.ops.tokenizer's job, since it's derived from this tokenizer via
+        token_byte_lengths(), not part of the tokenizer's own on-disk identity."""
+        os.makedirs(tokenizer_dir, exist_ok=True)
+        pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
+        with open(pickle_path, "wb") as f:
+            pickle.dump(self.enc, f)
 
     def get_vocab_size(self):
         return self.enc.n_vocab

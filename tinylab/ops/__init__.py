@@ -5,8 +5,10 @@ a function, not a static set, so an op like `prepare`/`train` can accept a diffe
 depending on the step's own "kind") and `run(cfg: dict, ctx: Context) -> dict`.
 
 Context carries base dir, device, and rank/world_size, plus lazily-built ModelManager/DataManager/
-BenchManager/tokenizer singletons -- explicitly passed to every op, never a module global, matching
-the subsystems' own no-ambient-globals rule (see llmllab/docs/subsystem-conventions.md).
+BenchManager/tokenizer singletons, plus the resume hooks tinylab.job.run_file wires up (see
+Context.resume_checkpoint_step/record_checkpoint) -- explicitly passed to every op, never a module
+global, matching the subsystems' own no-ambient-globals rule (see
+llmllab/docs/subsystem-conventions.md).
 """
 from dataclasses import dataclass, field
 
@@ -14,11 +16,32 @@ from dataclasses import dataclass, field
 @dataclass
 class Context:
     device_type: str = "auto"
+    resume: bool = False
     _device_info: tuple | None = field(default=None, repr=False, compare=False)
     _model_manager: object | None = field(default=None, repr=False, compare=False)
     _data_manager: object | None = field(default=None, repr=False, compare=False)
     _bench_manager: object | None = field(default=None, repr=False, compare=False)
     _tokenizer: object | None = field(default=None, repr=False, compare=False)
+    # Resume plumbing, wired up by tinylab.job.run_file (and only there) -- see its own docstring.
+    # Both default to "nothing to hook into", so ops.train.run() stays fully usable standalone
+    # (tests construct a bare Context with neither) and just falls back to scanning its checkpoint
+    # directory for the latest step, as it always has.
+    _resume_checkpoint_steps: dict = field(default_factory=dict, repr=False, compare=False)
+    _on_checkpoint: object | None = field(default=None, repr=False, compare=False)
+
+    def resume_checkpoint_step(self, step_name: str) -> "int | None":
+        """The job-state-file-confirmed checkpoint step to resume step_name from, or None if
+        there's no hint -- either this isn't a job.run_file-driven run, or the step has no
+        "in_progress" entry (nothing interrupted it, or it was never started). The caller (ops.
+        train.run) falls back to a directory scan in that case."""
+        return self._resume_checkpoint_steps.get(step_name)
+
+    def record_checkpoint(self, step_name: str, checkpoint_step: int) -> None:
+        """Call only after a checkpoint's full save has already returned without raising -- never
+        for a save that's merely in flight. A no-op unless job.run_file wired a real callback in,
+        so this is always safe to call."""
+        if self._on_checkpoint is not None:
+            self._on_checkpoint(step_name, checkpoint_step)
 
     @property
     def device_info(self):
@@ -80,10 +103,11 @@ class Context:
 COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size"}
 
 
-from tinylab.ops import prepare, train, bench  # noqa: E402 -- after Context, to avoid a cycle
+from tinylab.ops import prepare, train, bench, tokenizer  # noqa: E402 -- after Context, to avoid a cycle
 
 OPS = {
     "prepare": prepare,
     "train": train,
     "bench": bench,
+    "tokenizer": tokenizer,
 }

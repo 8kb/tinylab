@@ -53,6 +53,26 @@ anywhere.)
   each module's `accepted_keys(cfg)`), so a key that's real for one kind but nonsensical for
   another is also caught, not silently ignored. See `docs/job-file.md` for the full reference and
   `tests/test_docs.py` for the guard keeping it accurate.
+- **`--resume` is the one exception to "every knob is a job-file key" — it's a CLI flag, never a
+  job-file key.** Whether an invocation is a fresh start or a continuation is a fact about the
+  invocation, not the pipeline. It drives two things: a job state file under
+  `<base_dir>/job_state/` that skips already-completed steps after a crash (running the same job
+  file again *without* `--resume` while its state file exists is a hard, immediate error — a
+  concurrency guard, not just a convenience), and `Context.resume`, which a `train` step checks to
+  continue its own interrupted run — from the *exact* checkpoint step the state file confirms
+  finished saving, not a directory-scan guess (see `docs/architecture.md`'s "Resume: the job state
+  file"). The state file's own write is crash-safe (temp file + fsync, then a 2-generation
+  atomic-rename rotation) for the same reason: a mechanism meant to survive a crash can't itself be
+  the thing that gets corrupted by one. No pruning of periodic checkpoints (`"save_every"`) is
+  attempted — nothing in the family prunes old checkpoints, and a "keep last N" policy is exactly
+  the kind of tuned heuristic this repo avoids; a large model at a small `save_every` grows disk
+  usage without bound, by design, not oversight.
+- **`modelcore.store.FileSystemStore`'s own checkpoint writes are still not atomic** — a separate
+  repo, its own versioning discipline, out of scope for a tinylab-only change. The job state file
+  above fixes *which checkpoint step resume trusts*, not the individual checkpoint file's own
+  write; a resume with no state-file hint (a bare `Context`, not driven through `job.run_file`)
+  still falls back to a directory scan and is still exposed to a checkpoint that started writing
+  and never finished.
 - **`chat` is a separate CLI command, never a job op.** A pipeline step must run to completion
   unattended; a REPL blocks on a human at a prompt. Don't add `"chat"` to `tinylab.ops.OPS` —
   `tests/test_job.py` pins this (a step with `"op": "chat"` is rejected as an unknown op).
@@ -79,17 +99,31 @@ anywhere.)
   first step from being the one that first triggers a cold compiled-kernel cache on whatever
   backend it's running on. `modelcore.optim.MuonAdamW.step` is compiled regardless, internally —
   tinylab's own loop doesn't control or opt out of that. See `docs/architecture.md`.
-- **`train` never warm-starts its optimizer** — every step builds a fresh one
-  (`ModelManager.create_optimizer`), unlike nanochat's `chat_sft.py --load-optimizer`. This is why
-  attaching an adapter via a `kind: sft` step's `"model_config"` override needs no
-  matching guard here: nanochat forces `--load-optimizer` off for `--adapters` because a frozen
-  base's param groups are shaped completely differently from a fully-trainable one, and loading a
-  pretrained optimizer shard into that layout would corrupt momentum state — a failure mode that
-  simply can't occur when there's no warm-start to begin with.
-- **A `train` step's `"world_size"` is checked against the actual launch, not derived from it.**
-  The job file fixes the GPU count a run assumes (`total_batch_size`/grad-accum arithmetic depends
-  on it); a mismatched `torchrun --nproc_per_node` is a hard error, not a silently different
-  effective batch size. Edit the job file when the GPU configuration changes.
+- **A `tokenizer` step (if a job file uses one) must be its first step.** `Context.tokenizer` is a
+  lazily-built, memoized property — the first op in a run to touch it wins, and every op after that
+  gets the same cached instance. A `tokenizer` step running after `prepare`/`train`/`bench` already
+  accessed `ctx.tokenizer` would train and save a new vocab to disk that this same run never
+  actually uses. Most job files never need this op at all — tinylab ships a committed default vocab.
+- **`train` only ever warm-starts an optimizer from its *own* prior checkpoint (`--resume`), never
+  from a different one.** An `sft` step always builds a fresh optimizer for its `source_tag`
+  base's weights (`ModelManager.create_optimizer`), unlike nanochat's `chat_sft.py
+  --load-optimizer`. This is why attaching an adapter via a `kind: sft` step's `"model_config"`
+  override needs no matching guard here: nanochat forces `--load-optimizer` off for `--adapters`
+  because a frozen base's param groups are shaped completely differently from a fully-trainable
+  one, and loading a pretrained optimizer shard into that layout would corrupt momentum state — a
+  failure mode that can't occur for a fresh `sft` start, since there's no warm-start from a
+  *different* checkpoint to begin with. Resume is a different case entirely: it reloads a step's
+  own optimizer state (built from the same, unchanged config) onto the same freshly-`create_optimizer`'d
+  structure — always a shape match, or `optimizer.load_state_dict` raises loudly.
+- **A `train` step's `"world_size"` is checked against the actual launch, not derived from it —
+  twice.** The job file fixes the GPU count a run assumes (`total_batch_size`/grad-accum arithmetic
+  depends on it); a mismatched `torchrun --nproc_per_node` is a hard error, not a silently
+  different effective batch size. On `--resume`, the *checkpoint's own* recorded `world_size` is
+  checked too, against the current launch — `MuonAdamW`'s optimizer state doesn't reshard across a
+  different `world_size` (see `TODO.md`; a real crash in nanochat's own Stage 12), so a mismatch
+  here is refused up front rather than crashing deep inside the optimizer, or silently starting
+  with fresh momentum. Edit the job file (or relaunch at the original `world_size`) when the GPU
+  configuration changes.
 
 ## Testing
 
@@ -99,9 +133,12 @@ uv run pytest -q -m "not slow"   # skip that one real run: well under a second
 ```
 
 `tests/conftest.py` has the one shared `base_dir` fixture (isolates `TINYLAB_BASE_DIR` to a
-tmp_path) that most tests use. `test_smoke.py` (marked `slow`) is the only test that trains
-anything real — a few steps on a synthetic in-memory corpus, no network — and is what proves
-`train` -> `checkpoints` -> `engine` actually works together, not just each in isolation.
+tmp_path) that most tests use. `test_smoke.py` and `test_resume.py` (both marked `slow`) are the
+only tests that train anything real — a few steps on a synthetic in-memory corpus, no network —
+proving, respectively, `train` -> `checkpoints` -> `engine` end to end, and that a resumed run
+lands on the exact same val_bpb a continuous run would (the strongest signal that model weights,
+optimizer state, and dataloader position all round-trip correctly, not just that *something* got
+saved). `test_tok_train.py` trains real (tiny) tokenizers too, but fast enough not to need `slow`.
 
 A change here that a subsystem's own suite wouldn't catch (e.g. a new op, a job-schema change)
 needs `uv run pytest -q` green against the *pinned* install (not an editable local sibling

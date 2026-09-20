@@ -73,6 +73,18 @@ def find_last_step(checkpoint_dir):
     return _last_step(checkpoint_dir)
 
 
+def load_for_resume(checkpoint_dir, step, device, rank, manager):
+    """Everything tinylab.ops.train needs to continue an interrupted run at `step`: the model
+    (loaded with config=None, so it gets exactly the config that was checkpointed -- a resumed run
+    never re-resolves "model_config"/"source_tag" for itself, see tinylab.ops.train's own
+    docstring), this rank's optimizer state (None if it was never saved for this step/rank -- the
+    caller decides whether that's fatal), and the full meta dict (dataloader position, val_bpb,
+    world_size the checkpoint was saved at, ...)."""
+    store = FileSystemStore(checkpoint_dir, step)
+    model = manager.load_model(store, device=device, config=None, train=True)
+    return model, store.read_optimizer_state(rank=rank, map_location=device), store.read_meta()
+
+
 def load_model(source, device, phase, model_tag, step=None, config_override=None):
     """source: 'base' | 'sft'. model_tag is required -- tinylab has no auto-discovery, since a job
     file always names the tag it just trained or wants to load. config_override: see

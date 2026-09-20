@@ -1806,6 +1806,43 @@ wheels = [
 ]
 
 [[package]]
+name = "rustbpe"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/2e/f16e179ad1e185f0bb5a8fc2376fff05d1eeefcb6d8a77ee04306e8a42ae/rustbpe-0.1.0.tar.gz", hash = "sha256:18765f62ac579a9ff9e89c611f9c9b9e46bd1adde9be3f59c00b6eb4e1f28b3a", size = 29723, upload-time = "2026-01-03T22:24:11.872Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/d4/cdb13041ebfc5e10b98fa0de1d631bbce5476fe265c5e97516c344bbf44d/rustbpe-0.1.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:15f2e126a2b9fde264598f9317b1ec7f20ed3cf1e49cae081f7d6b7c1064655c", size = 1010629, upload-time = "2026-01-03T22:23:33.475Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/dd/401cb29be42b3efa80a8499ac41532bb1aa488c16cb1921dca880f0d75ce/rustbpe-0.1.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:34dc37f2771517813b70be47e26d5861ba69298f299dfd24409882e76bd1ccad", size = 951962, upload-time = "2026-01-03T22:23:35.025Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/4c/1f17ebab894dcb72e5b15389ad4b06b74637745163371339f32f23cdec76/rustbpe-0.1.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d4e7543962c932c3dcc29f5a02855ad613e9b05bc93c898fb99e4c7928598c7b", size = 1034660, upload-time = "2026-01-03T22:23:36.353Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/95/ab37d09e7b51b3ae49ef5af885c3d7c0244c72521f0740c6b55e1827a251/rustbpe-0.1.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f7e90da31ce2708481c6b2169d9b8072917d7deefae4fb91cf25655dedac6afa", size = 1078818, upload-time = "2026-01-03T22:23:37.606Z" },
+    { url = "https://files.pythonhosted.org/packages/94/65/79a4005477545c0661571e642d614177525e010ff9fc27cc10e579bde38d/rustbpe-0.1.0-cp310-cp310-win_amd64.whl", hash = "sha256:9b92ff475c37a2b10391614c10ab2deb923bb029a8288e11e77618d5e5fcdc0e", size = 919699, upload-time = "2026-01-03T22:23:38.944Z" },
+    { url = "https://files.pythonhosted.org/packages/16/c1/d4fadf70d1cc0914c812a9c7c1e5cce0813440f7d16082fdb399ec33748d/rustbpe-0.1.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:400be6ede8875d5ac0e0ac91dfba1ec7ea7d359353b0465da633576cf01c7de7", size = 1008245, upload-time = "2026-01-03T22:23:40.245Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/e1/ac7d4044dbee242bbcb7d9fc425f6ea8c52f984c7708cbb4cb9633976b96/rustbpe-0.1.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:dff3ffb6f05576a27732d2013f044ec6f137bc7bce6773a5e134cfc0c24dcc82", size = 949344, upload-time = "2026-01-03T22:23:41.664Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/7b/008e45858130eb803085d131a05e6e55c123a2b63b763ea08a45aa8b7673/rustbpe-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:92a0186ed815ccec376cca23c4bc5f209f6c67efeb101c1c935345cd63cc9eea", size = 1031915, upload-time = "2026-01-03T22:23:42.93Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/6e/d10c687670c42d34306713ae75d6477d6c32424bd251033bd9ff2a243ccd/rustbpe-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fec78edb30f3264d0db69ffd7ac333d695be76e4e672fd5301626787bc1220c2", size = 1076476, upload-time = "2026-01-03T22:23:43.899Z" },
+    { url = "https://files.pythonhosted.org/packages/78/a8/f64b877d0a0239f4262a90d74ded014f1e2c4250c6273898280739177a7b/rustbpe-0.1.0-cp311-cp311-win_amd64.whl", hash = "sha256:0f35a858c31faf09e6723fe2e8c020efcf4e036b7270ed151ca8538fad1fe0c5", size = 916888, upload-time = "2026-01-03T22:23:44.936Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/a3/7fe53c4dcd7d90a777424c61ac8072153ce47941066e0a247c020a4a663e/rustbpe-0.1.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:13e6aeaaf6e2f970ab577f32a6c49c8dd23517279253a37873ddc7f74fd30622", size = 1007207, upload-time = "2026-01-03T22:23:46.336Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/41/dee1474cfea594d7a9cebb42f683170f1f2d8af4473541c0a1f96dfaff76/rustbpe-0.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:40763a0751ba8a595717f5015d18b0241e1af9930412e42d350380ba4601361b", size = 947913, upload-time = "2026-01-03T22:23:47.458Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/fd/c90bc3a3e823b8cafb85625ed37311987c20317168ea73d0ebaba54f8df2/rustbpe-0.1.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bfe8d24d0d71c16fb8ba5106e7d2be2c43211195a74ffa7e2c88cb98c07122e4", size = 1030968, upload-time = "2026-01-03T22:23:48.753Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/64/e15606774d2f13d1bdbdca4cd6e8fcd14fc0c3fb7ca7b00412c4ed0a8700/rustbpe-0.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:844f7f6c3bd59a9578b87ebc6bb60fe3ee47c8d8040a62488ce8e7eaeeb31319", size = 1075101, upload-time = "2026-01-03T22:23:50.041Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/26/8de98d90fd8765a1ea517b01897e05aa9932998e604bb9003e5e9b73be3c/rustbpe-0.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:b79b67d8db6a2fe3928918006569e73aee23e012b3b0b36fd4a2a85cc2c2161f", size = 914924, upload-time = "2026-01-03T22:23:51.31Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/63/a0475defd438cd6a4cd28b74ad8dd01bb7de6adafaa411968e758b0a9036/rustbpe-0.1.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:6a59c05a8123d3a8e8815106fd1938a9499d4fdaf5cf00351fa7d3b5cc4f8ad6", size = 1007322, upload-time = "2026-01-03T22:23:52.568Z" },
+    { url = "https://files.pythonhosted.org/packages/81/72/18e762472a42d68820e2d1244655fd960e200e449136fabe3c32f6f2a1b1/rustbpe-0.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bc0a8dd8b30860e3a4889ab7cf7c04a2614f8fc77c191efde1500aa054484efa", size = 948256, upload-time = "2026-01-03T22:23:53.926Z" },
+    { url = "https://files.pythonhosted.org/packages/16/07/3c0948db94fc454b62012ff8b3e74ad13f84bf8fbcfb84b402bfb786e82e/rustbpe-0.1.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3eeb8efae3d10a3b6640a1e2bdc7f1e55a15f867bdae9efb3d8f0757b01d9d3a", size = 1031258, upload-time = "2026-01-03T22:23:54.961Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/69/77355ca8baf0c5023994b3f11304822d07116567ea47893f90267c086f87/rustbpe-0.1.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2b0b77591c9e836df41ad0b30be9ec519a708c477cbf82eedaf839e7a9b10101", size = 1075321, upload-time = "2026-01-03T22:23:55.995Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/fe/5c529d92988be7df251de718a633054ecca2d5986a17759a6546a9f45c26/rustbpe-0.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:cc5bebc9990071e400bbe304304af3d5757522bb2a1177e2c3517f11ad28f0eb", size = 915136, upload-time = "2026-01-03T22:23:57.56Z" },
+    { url = "https://files.pythonhosted.org/packages/af/d7/8f7215233acd67402f8bdf972daa3fbe9184b176348530b84ac40751a806/rustbpe-0.1.0-cp313-cp313t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b1229e70c2d091faf8c0a50951e2e734b3b810d1d2b7677cd49d86dc3853c283", size = 1031277, upload-time = "2026-01-03T22:23:58.55Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/1a/0b34c02138f28a984bc44fdc0dc10afc9137814b2a56b8cd4e5ae25b8601/rustbpe-0.1.0-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:02d123e72fe9253c92904bfe2ba35afc816576b2cdbb432a96001e75bafb888e", size = 1007777, upload-time = "2026-01-03T22:23:59.539Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/b1/da66ce14f43b23136c07183be03ddbc58654824455cce36c2bad38254aeb/rustbpe-0.1.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:a0df5172a813c982d31673d9de32dd053ddbb64ced2b97709a85d2e3c6a6cd28", size = 948400, upload-time = "2026-01-03T22:24:00.506Z" },
+    { url = "https://files.pythonhosted.org/packages/05/d0/551dcfb8d314f4e0b60b86ab616bcaaf3a381f6e72f83f1211246528a7c1/rustbpe-0.1.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c525072e521a5cf729474a0ea6c83b1b16973b877098ee7060eac4bbacd46c7a", size = 1031325, upload-time = "2026-01-03T22:24:01.501Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/36/3f1730a6b8f4435b8cb2ceee2edb3be8357656e35f1f6549b5f387eb056a/rustbpe-0.1.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e0c9216f9e38558f0939f6e34cc78d5517d7a02026c1a35b271ca82e9b522539", size = 1075729, upload-time = "2026-01-03T22:24:02.528Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/03/aaa994e9a28cb7248c2cfc43a93c779ee7ac0e19cf9eae6717b63bbe6a8d/rustbpe-0.1.0-cp314-cp314-win_amd64.whl", hash = "sha256:b5ceb789bb93a82547c0ed7277ecc01047eaf0eeea6bbc0a21420e65e5fb553a", size = 915650, upload-time = "2026-01-03T22:24:03.71Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/68/3ab181ff8b12dcabdb256dffb82de0d8bf30c72ac3d188451ac5fa1cc643/rustbpe-0.1.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:88d1482ccadf5e29b524b13740b3a5e1f4e454a048684885d894fd1a9930617a", size = 1030995, upload-time = "2026-01-03T22:24:04.76Z" },
+    { url = "https://files.pythonhosted.org/packages/96/a2/02498910b4852967fd4b6d77ce94542c5483f1551decb6911480229d116c/rustbpe-0.1.0-pp311-pypy311_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ba8e08ed3cc7a7bf832f70c86c64a94d0112e8c526d55a1f40e53ede2ca14d22", size = 1031327, upload-time = "2026-01-03T22:24:09.246Z" },
+    { url = "https://files.pythonhosted.org/packages/49/13/78d768a451dc9e634f933f2231b3fa9be524955ed84317b40e5528a2d906/rustbpe-0.1.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9f419fd428e8ffd2430945a694cb5177706550ee5c9b16737ba860ecccd5acff", size = 1075802, upload-time = "2026-01-03T22:24:10.573Z" },
+]
+
+[[package]]
 name = "securesystemslib"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1956,12 +1993,13 @@ wheels = [
 
 [[package]]
 name = "tinylab"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "benchcore", extra = ["bundle"] },
     { name = "datacore", extra = ["parquet", "torch"] },
     { name = "modelcore", extra = ["fa3"] },
+    { name = "rustbpe" },
     { name = "tiktoken" },
     { name = "torch", version = "2.9.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu') or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu') or (extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu')" },
@@ -1989,6 +2027,7 @@ requires-dist = [
     { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.2.1" },
     { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.3.0" },
     { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.4.0" },
+    { name = "rustbpe", specifier = ">=0.1.0" },
     { name = "setuptools", marker = "extra == 'cpu'", specifier = ">=65.0.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
     { name = "torch", specifier = "==2.9.1" },

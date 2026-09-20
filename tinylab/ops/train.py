@@ -10,6 +10,15 @@ corrections) used to compute is now a required job-file key instead -- see AGENT
 tree carries only concrete, already-decided values, never a derivation rule" invariant, which now
 covers the whole job file. Compute the removed numbers with nanochat's own
 `scripts/model_info.py --target-flops=... --json` and paste the result in.
+
+Resume (ctx.resume, set by `python -m tinylab ... --resume`, never a job-file key -- see
+tinylab.job) is a run-level fact, not a pipeline fact: when it's set, a step first checks whether
+it already has a checkpoint under its own output_tag and, if so, continues from it instead of
+starting fresh, regardless of kind. Which checkpoint step to trust comes from
+ctx.resume_checkpoint_step (the job state file's own record of the last checkpoint whose save
+*fully* returned -- see tinylab.job) when that's available, falling back to a directory scan
+(checkpoints.find_last_step) only when it isn't (e.g. this op called directly, without going
+through job.run_file). See "Resume" in the run() docstring below.
 """
 import os
 import time
@@ -30,7 +39,7 @@ _COMMON_KEYS = {
     "kind", "dataset", "output_tag", "num_iterations", "device_batch_size", "total_batch_size",
     "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr", "weight_decay",
     "warmup_steps", "warmdown_ratio", "final_lr_frac", "muon_momentum_warmup_steps",
-    "eval_every", "eval_tokens",
+    "eval_every", "eval_tokens", "save_every",
     "fp8", "fp8_recipe", "fp8_eval",
     "doc_masking", "doc_masking_max_docs_per_row",
     "adapter_lr", "adapter_scalar_lr",
@@ -43,6 +52,14 @@ def accepted_keys(cfg: dict) -> set:
     kind = cfg.get("kind")
     kind_keys = _BASE_KEYS if kind == "base" else _SFT_KEYS if kind == "sft" else (_BASE_KEYS | _SFT_KEYS)
     return _COMMON_KEYS | kind_keys
+
+
+def _one_epoch(dataset, sequence_len, total_batch_size):
+    """One epoch over the training split, in optimizer steps (not micro-batches -- total_batch_size
+    already accounts for grad-accum and world_size). kind="sft"'s default training horizon when
+    "num_iterations" is omitted -- used both on a fresh start and (identically) when resuming a
+    step that never had an explicit "num_iterations" of its own."""
+    return max(1, dataset.num_sequences("train") * sequence_len // total_batch_size)
 
 
 def _open_dataset(cfg, ctx, kind, sequence_len):
@@ -93,7 +110,9 @@ def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac, mo
 
     Returns (get_lr_multiplier, get_muon_momentum): both take a 0-indexed step and return a float
     -- get_lr_multiplier scales every param group's base LR; get_muon_momentum sets Muon's own
-    momentum directly (not a multiplier) for the "muon" param groups only.
+    momentum directly (not a multiplier) for the "muon" param groups only. Both are pure functions
+    of the absolute step, so a resumed run needs no special-casing here -- the loop just starts
+    part-way through range(...) and these compute the correct value from step 0 either way.
     """
     def get_lr_multiplier(it):
         return lr_multiplier(it, num_iterations, warmup_steps, warmdown_ratio, final_lr_frac)
@@ -107,7 +126,18 @@ def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac, mo
 def run(cfg: dict, ctx) -> dict:
     """Runs one train step: cfg is a resolved job-file step (see docs/job-file.md for every key),
     ctx the shared Context for this job run. Returns {"op": "train", "kind", "output_tag", "step",
-    "val_bpb", "total_training_time"}."""
+    "val_bpb", "total_training_time"}.
+
+    Resume (ctx.resume): if set, this step first checks whether checkpoint_dir (named by its own
+    output_tag) already has a checkpoint on disk, regardless of kind. If so, it loads that
+    checkpoint's own model config (never re-resolving "model_config"/"source_tag" -- a resumed run
+    is a continuation, not a re-interpretation), optimizer state, and dataloader position, and
+    continues training from its saved step instead of the kind-specific fresh-start path below. A
+    world_size mismatch against the checkpoint's own recorded value is a hard error (MuonAdamW's
+    optimizer state doesn't reshard across world_size -- see TODO.md), and so is a missing
+    optimizer shard for this rank -- resume never silently falls back to a fresh optimizer. If
+    ctx.resume is set but no checkpoint exists yet under this tag, this is just a normal fresh
+    start (safe to pass --resume unconditionally in an unattended restart script)."""
     assert "kind" in cfg, "train: 'kind' is required ('base' or 'sft')"
     kind = cfg["kind"]
     assert kind in ("base", "sft"), f"train: kind must be 'base' or 'sft', got {kind!r}"
@@ -149,40 +179,90 @@ def run(cfg: dict, ctx) -> dict:
     device_batch_size = cfg.get("device_batch_size", 4)
     total_batch_size = cfg["total_batch_size"]
 
-    if kind == "base":
-        assert "model_config" in cfg, (
-            'train (kind=base): "model_config" is required -- a path to a materialized '
-            "ModelConfig tree (see nanochat's scripts/model_info.py --dump-config)."
-        )
-        real_config = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
-        model_stats = manager.stats(real_config)
-        print0(f"Model: {model_stats.n_layer} layers, {model_stats.num_params:,} params ({model_stats.num_scaling_params:,} scaling)")
-        num_iterations = cfg["num_iterations"]
+    output_tag = cfg.get("output_tag", cfg["name"])
+    checkpoint_dir = os.path.join(checkpoints.get_base_dir(), checkpoints.CHECKPOINT_DIRS[kind], output_tag)
 
-        model = manager.create_model(real_config, device=device, seed=42)
-        base_model_tag = None
-        base_model_step = None
-    else:
-        assert "source_tag" in cfg, "train: kind='sft' requires 'source_tag' (the tag of a prior 'base' train step)"
-        source = cfg.get("source", "base")
-        # An sft step's "model_config", if given, is a config-override request (e.g. to attach
-        # LoRA/DoRA adapters to an already-trained base) -- not a from-scratch build like kind=base
-        # uses. Omitting it (the common case) loads the checkpoint's own stored config unchanged.
-        config_override = None
-        if "model_config" in cfg:
-            config_override = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
-        model, _source_tokenizer, meta = checkpoints.load_model(
-            source, device, phase="train", model_tag=cfg["source_tag"], step=cfg.get("source_step"),
-            config_override=config_override,
-        )
-        real_config = model.config
-        num_iterations = cfg.get("num_iterations")
-        if num_iterations is None:
-            # One epoch over the training split, in optimizer steps (not micro-batches --
-            # total_batch_size already accounts for grad-accum and world_size).
-            num_iterations = max(1, dataset.num_sequences("train") * sequence_len // total_batch_size)
-        base_model_tag = meta.get("model_tag")
-        base_model_step = meta.get("step")
+    # -- resume: does this step already have a checkpoint of its own to continue from? --
+    resumed_step = None
+    base_model_tag = base_model_step = None
+    prior_training_time = 0.0
+    resume_dataloader_state = None
+    resumed_val_bpb = None
+    optimizer_state = None
+    if ctx.resume:
+        # A job-state-file-confirmed step (only ever recorded right after that checkpoint's own
+        # save fully returned -- see ctx.record_checkpoint below) is trusted first: a directory
+        # scan alone can't tell a fully-written checkpoint from one that started writing and never
+        # finished (a crash mid-torch.save leaves a model_<step>.pt that still matches the naming
+        # pattern). Only fall back to the scan when there's no such hint -- e.g. this call isn't
+        # driven by tinylab.job.run_file at all (a bare Context, as this repo's own tests use).
+        resumed_step = ctx.resume_checkpoint_step(cfg["name"])
+        if resumed_step is None:
+            try:
+                resumed_step = checkpoints.find_last_step(checkpoint_dir)
+            except FileNotFoundError:
+                pass  # nothing to continue -- fall through to the normal fresh-start path below
+        if resumed_step is not None:
+            model, optimizer_state, meta = checkpoints.load_for_resume(checkpoint_dir, resumed_step, device, ddp_rank, manager)
+            saved_world_size = meta.get("user_config", {}).get("world_size")
+            assert saved_world_size == ddp_world_size, (
+                f"train: resume found a checkpoint saved at world_size={saved_world_size}, but "
+                f"this run was launched with {ddp_world_size} -- MuonAdamW's optimizer state "
+                f"doesn't reshard across world_size (see TODO.md); relaunch at the original "
+                f"world_size to resume."
+            )
+            assert optimizer_state is not None, (
+                f"train: resume found no optimizer state for step {resumed_step} rank {ddp_rank} "
+                f"in {checkpoint_dir} -- refusing to resume with a freshly-initialized optimizer."
+            )
+            real_config = model.config
+            model_stats = manager.stats(real_config)
+            print0(f"[{cfg['name']}] resuming from step {resumed_step}: {model_stats.n_layer} layers, {model_stats.num_params:,} params")
+            num_iterations = cfg["num_iterations"] if kind == "base" else cfg.get("num_iterations")
+            if num_iterations is None:
+                num_iterations = _one_epoch(dataset, sequence_len, total_batch_size)
+            assert resumed_step <= num_iterations, (
+                f"train: resume: checkpoint at {checkpoint_dir} is already at step {resumed_step}, "
+                f"at or past num_iterations={num_iterations} -- raise \"num_iterations\" in the "
+                f"job file to continue further, or omit --resume to start over."
+            )
+            base_model_tag, base_model_step = meta.get("base_model_tag"), meta.get("base_model_step")
+            prior_training_time = meta.get("total_training_time", 0.0)
+            resume_dataloader_state = meta.get("dataloader_state_dict")
+            resumed_val_bpb = meta.get("val_bpb")
+
+    if resumed_step is None:
+        if kind == "base":
+            assert "model_config" in cfg, (
+                'train (kind=base): "model_config" is required -- a path to a materialized '
+                "ModelConfig tree (see nanochat's scripts/model_info.py --dump-config)."
+            )
+            real_config = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
+            model_stats = manager.stats(real_config)
+            print0(f"Model: {model_stats.n_layer} layers, {model_stats.num_params:,} params ({model_stats.num_scaling_params:,} scaling)")
+            num_iterations = cfg["num_iterations"]
+
+            model = manager.create_model(real_config, device=device, seed=42)
+        else:
+            assert "source_tag" in cfg, "train: kind='sft' requires 'source_tag' (the tag of a prior 'base' train step)"
+            source = cfg.get("source", "base")
+            # An sft step's "model_config", if given, is a config-override request (e.g. to attach
+            # LoRA/DoRA adapters to an already-trained base) -- not a from-scratch build like
+            # kind=base uses. Omitting it (the common case) loads the checkpoint's own stored
+            # config unchanged.
+            config_override = None
+            if "model_config" in cfg:
+                config_override = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
+            model, _source_tokenizer, meta = checkpoints.load_model(
+                source, device, phase="train", model_tag=cfg["source_tag"], step=cfg.get("source_step"),
+                config_override=config_override,
+            )
+            real_config = model.config
+            num_iterations = cfg.get("num_iterations")
+            if num_iterations is None:
+                num_iterations = _one_epoch(dataset, sequence_len, total_batch_size)
+            base_model_tag = meta.get("model_tag")
+            base_model_step = meta.get("step")
 
     if cfg.get("fp8"):
         fp8_report = manager.enable_fp8(model, recipe=cfg.get("fp8_recipe", "tensorwise"))
@@ -201,6 +281,8 @@ def run(cfg: dict, ctx) -> dict:
     if "adapter_scalar_lr" in cfg:
         optimizer_hparams_kwargs["adapter_scalar_lr"] = cfg["adapter_scalar_lr"]
     optimizer = manager.create_optimizer(model, OptimizerHparams(**optimizer_hparams_kwargs))
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
 
     tokens_per_fwdbwd = device_batch_size * sequence_len * ddp_world_size
     assert total_batch_size % tokens_per_fwdbwd == 0, f"total_batch_size ({total_batch_size}) must be a multiple of {tokens_per_fwdbwd}"
@@ -208,6 +290,7 @@ def run(cfg: dict, ctx) -> dict:
 
     eval_every = cfg.get("eval_every", 50)
     eval_tokens = cfg["eval_tokens"]
+    save_every = cfg.get("save_every", -1)
 
     # doc_args is built here, outside the compiled model, and passed in as plain data -- never
     # inside a compiled region (modelcore's invariant -- see modelcore/AGENTS.md's "Intra-document
@@ -229,12 +312,35 @@ def run(cfg: dict, ctx) -> dict:
         cfg.get("muon_momentum_warmup_steps", 400),
     )
 
-    train_loader = ctx.data_manager.batches(dataset, "train", device_batch_size, device=device, rank=ddp_rank, world_size=ddp_world_size, infinite=True)
+    def _save(step, val_bpb, dataloader_state, elapsed):
+        meta_data = {
+            "step": step, "val_bpb": val_bpb, "tokenizer_fingerprint": tokenizer_fingerprint,
+            "model_config": manager.config_to_dict(real_config),
+            # cfg's own "model_config" is excluded from user_config: it's the *request* (a path,
+            # already resolved into the "model_config" key above -- a different dict, same name by
+            # coincidence), and would otherwise duplicate that key's content under a different,
+            # unresolved shape.
+            "user_config": {k: v for k, v in cfg.items() if k != "model_config"},
+            "device_batch_size": device_batch_size, "max_seq_len": sequence_len, "total_batch_size": total_batch_size,
+            "dataloader_state_dict": dataloader_state, "total_training_time": elapsed,
+        }
+        if kind == "sft":
+            meta_data["base_model_tag"] = base_model_tag
+            meta_data["base_model_step"] = base_model_step
+        checkpoints.save_checkpoint(checkpoint_dir, step, model.state_dict(), optimizer.state_dict(), meta_data, rank=ddp_rank)
+        # Only after the save above has fully returned -- this is the signal job.run_file's job
+        # state file trusts as "this step is safely resumable from here" (see ctx.record_checkpoint
+        # and the resume-detection block above). Firing it any earlier would defeat the whole point.
+        ctx.record_checkpoint(cfg["name"], step)
+        print0(f"[{cfg['name']}] saved checkpoint: {checkpoint_dir} (step {step})")
+
+    train_loader = ctx.data_manager.batches(dataset, "train", device_batch_size, device=device, rank=ddp_rank, world_size=ddp_world_size, resume=resume_dataloader_state, infinite=True)
     x, y, dataloader_state = next(train_loader)
 
-    val_bpb = None
+    val_bpb = resumed_val_bpb
+    start_step = resumed_step or 0
     t_start = time.time()
-    for step in range(num_iterations + 1):
+    for step in range(start_step, num_iterations + 1):
         last_step = step == num_iterations
         if eval_every > 0 and (last_step or step % eval_every == 0):
             model.eval()
@@ -248,6 +354,13 @@ def run(cfg: dict, ctx) -> dict:
                 val_bpb = manager.evaluate_bpb(model, val_loader, eval_steps, token_bytes, **eval_kwargs)
             print0(f"[{cfg['name']}] step {step:05d} | val bpb: {val_bpb:.6f}")
             model.train()
+        # save: always at the end of the run, or every save_every steps -- but never at step 0
+        # (no training has happened yet) and never re-saving the step this run just resumed from
+        # (it's already on disk, unchanged). `step` here already means "this many iterations have
+        # completed" (0 at the very start), the same convention the eval check above uses, so no
+        # off-by-one between what gets evaluated and what gets saved under the same step number.
+        if last_step or (save_every > 0 and step > 0 and step != resumed_step and step % save_every == 0):
+            _save(step, val_bpb, dataloader_state, prior_training_time + (time.time() - t_start))
         if last_step:
             break
         step_loss = 0.0  # grad-accum-averaged, not the last micro-batch's raw loss
@@ -264,26 +377,7 @@ def run(cfg: dict, ctx) -> dict:
         model.zero_grad(set_to_none=True)
         if step % 10 == 0:
             print0(f"[{cfg['name']}] step {step:05d}/{num_iterations} | loss {step_loss:.4f}")
-    total_training_time = time.time() - t_start
-
-    output_tag = cfg.get("output_tag", cfg["name"])
-    checkpoint_dir = os.path.join(checkpoints.get_base_dir(), checkpoints.CHECKPOINT_DIRS[kind], output_tag)
-    meta_data = {
-        "step": num_iterations, "val_bpb": val_bpb, "tokenizer_fingerprint": tokenizer_fingerprint,
-        "model_config": manager.config_to_dict(real_config),
-        # cfg's own "model_config" is excluded from user_config: it's the *request* (a path,
-        # already resolved into the "model_config" key above -- a different dict, same name by
-        # coincidence), and would otherwise duplicate that key's content under a different,
-        # unresolved shape.
-        "user_config": {k: v for k, v in cfg.items() if k != "model_config"},
-        "device_batch_size": device_batch_size, "max_seq_len": sequence_len, "total_batch_size": total_batch_size,
-        "dataloader_state_dict": dataloader_state, "total_training_time": total_training_time,
-    }
-    if kind == "sft":
-        meta_data["base_model_tag"] = base_model_tag
-        meta_data["base_model_step"] = base_model_step
-    checkpoints.save_checkpoint(checkpoint_dir, num_iterations, model.state_dict(), optimizer.state_dict(), meta_data, rank=ddp_rank)
-    print0(f"[{cfg['name']}] saved checkpoint: {checkpoint_dir} (step {num_iterations})")
+    total_training_time = prior_training_time + (time.time() - t_start)
 
     return {
         "op": "train", "kind": kind, "output_tag": output_tag, "step": num_iterations,

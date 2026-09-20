@@ -6,10 +6,17 @@ block that tinylab.chat reads), then an ordered "steps" list dispatched to tinyl
 No dependency graph: the pipeline *is* the order, and each step's inputs are named artifacts on
 disk (a prepared dataset, a checkpoint tag), so `--only` can re-run one step standalone once those
 artifacts already exist.
+
+`--resume` (run_file's `resume` param) is the one exception to "config, not flags" -- whether a
+particular invocation is a fresh start or a continuation is a fact about the invocation, not the
+pipeline, so it lives on the CLI rather than as a job-file key. See run_file's own docstring for
+the job state file mechanism this drives.
 """
 import difflib
+import hashlib
 import json
 import os
+import time
 
 from tinylab.ops import COMMON_KEYS, OPS
 
@@ -121,9 +128,124 @@ def resolve_chat(job: dict) -> dict:
     return _deep_merge(job.get("defaults", {}), job.get("chat", {}))
 
 
-def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False) -> list[dict]:
+def _state_path(job_path: str) -> str:
+    """One job state file per job file, under <base_dir>/job_state/ -- not next to the job file
+    itself, matching every other piece of tinylab's runtime state (checkpoints, prepared datasets,
+    the tokenizer all live under TINYLAB_BASE_DIR, never beside a source-controlled job file).
+    Named <stem>-<8 hex chars of sha256(abspath)> so two job files with the same basename in
+    different directories don't collide, while staying legible in a directory listing."""
+    from tinylab.runtime import get_base_dir
+    abs_path = os.path.abspath(job_path)
+    stem = os.path.splitext(os.path.basename(job_path))[0]
+    digest = hashlib.sha256(abs_path.encode()).hexdigest()[:8]
+    state_dir = os.path.join(get_base_dir(), "job_state")
+    os.makedirs(state_dir, exist_ok=True)
+    return os.path.join(state_dir, f"{stem}-{digest}.json")
+
+
+def _state_exists(path: str) -> bool:
+    """True if any trace of a previous attempt exists -- the current generation, the previous one
+    (".old"), or a transient write in flight (".tmp") when something died mid-write. Any of the
+    three means a previous run happened and never cleaned up after itself."""
+    return any(os.path.exists(path + suffix) for suffix in ("", ".old", ".tmp"))
+
+
+def _remove_state(path: str) -> None:
+    for suffix in ("", ".old", ".tmp"):
+        candidate = path + suffix
+        if os.path.exists(candidate):
+            os.remove(candidate)
+
+
+def _write_state(path: str, content: dict) -> dict:
+    """Atomic, generation-rotated write: write the new content to a temp file (flushed + fsync'ed,
+    so it's durable on disk before anything else happens), drop the previous ".old" generation,
+    demote the current file to ".old" (atomic rename), then promote the temp file to current
+    (atomic rename). A crash at any point in that sequence leaves either the untouched previous
+    file or the untouched, already-durable ".old" readable -- never a torn write, regardless of
+    how reliable the filesystem's rename semantics actually are (matters on network/overlay
+    storage, which a GPU pod's mount can be). "counter" increments on every write -- not needed to
+    pick between current/.old (the rotation order alone guarantees which is newer), just a cheap,
+    always-available sanity signal for a human inspecting the file by hand. Returns content with
+    "counter" filled in, so the caller's own in-memory copy stays in sync with what's now on disk."""
+    old_path, tmp_path = path + ".old", path + ".tmp"
+    content = dict(content, counter=content.get("counter", 0) + 1)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(content, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    if os.path.exists(old_path):
+        os.remove(old_path)
+    if os.path.exists(path):
+        os.replace(path, old_path)
+    os.replace(tmp_path, path)
+    return content
+
+
+def _read_state(path: str) -> dict | None:
+    """The current generation if it exists and parses; the previous one if not (a crash mid-write
+    left `path` missing or truncated -- prints a warning, since resuming from ".old" means
+    resuming from whatever was confirmed one generation ago, possibly one checkpoint behind the
+    truest state); None if neither is usable (treated as "nothing to resume from" -- --resume then
+    just runs every step fresh, which is safe, if wasteful, rather than raising over a corrupted
+    state file -- also warned about, for the same reason)."""
+    for i, candidate in enumerate((path, path + ".old")):
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if i == 1:
+                print(f"warning: {path} is missing or unreadable -- resuming from the previous generation ({candidate}) instead, which may be one checkpoint behind.")
+            return content
+    if os.path.exists(path) or os.path.exists(path + ".old"):
+        print(f"warning: neither {path} nor its previous generation could be read -- resuming as a fresh start (no steps will be skipped).")
+    return None
+
+
+def _pid_alive(pid) -> bool:
+    """Best-effort liveness check for a job state file's recorded "pid" -- os.kill(pid, 0) sends
+    no signal, just asks the OS whether the process exists. Inherently racy (the process could
+    exit the instant after this check returns True) and POSIX-specific (this repo's own targets:
+    laptop dev, RunPod GPU pods -- see AGENTS.md), not a real mutex; good enough to catch the
+    common case (a second run launched by mistake while the first is still going), not a guarantee."""
+    if not isinstance(pid, int):
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but not signalable by us (e.g. owned by another user) -- still alive
+    return True
+
+
+def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, resume: bool = False) -> list[dict]:
     """Loads, validates, and (unless dry_run) runs every resolved step in order. Returns each
-    step's result dict (or, for --dry-run, its fully resolved config instead)."""
+    step's result dict (or, for --dry-run, its fully resolved config instead) -- for a resumed run
+    this holds only the steps actually executed *this* invocation, not the ones skipped because
+    they'd already completed, so len(results) can be shorter than len(steps).
+
+    Resume/skip is a whole-pipeline concern, active only for a real (not --dry-run), full-pipeline
+    (not --only) run: a job state file under <base_dir>/job_state/ (see _write_state/_read_state
+    for its crash-safety) records, per step, "done" (skip unconditionally on a later --resume) or
+    -- for a `train` step that took at least one periodic checkpoint but didn't finish -- "in
+    progress" plus exactly which checkpoint step to resume it from, so a resumed train step never
+    has to guess by scanning its checkpoint directory (which could contain a *newer* checkpoint
+    file that started writing but never finished -- see tinylab.ops.train).
+
+    A state file that already exists is handled two ways, checked in this order:
+    - If its recorded "pid" is still alive (see _pid_alive), this is refused unconditionally --
+      even with `resume=True` -- since two processes racing on the same checkpoint files is real
+      corruption, not a resumable situation. Delete the state file yourself if that pid has since
+      been reused by something unrelated.
+    - Otherwise, without `resume=True` it's a hard, immediate error (a previous run died without
+      cleanup); pass resume=True to continue it, or delete the state file to force a fresh start.
+
+    resume=True with no existing state file is a no-op (an ordinary fresh run) -- safe to pass
+    unconditionally from an unattended restart script. The state file is deleted only when every
+    step finishes without raising; a step that fails leaves it in place, exactly as intended."""
     job = load(job_path)
     job_dir = os.path.dirname(os.path.abspath(job_path))
     steps = resolve_steps(job, only=only, job_dir=job_dir)
@@ -135,19 +257,72 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False) -
 
     from tinylab.ops import Context
     from tinylab.runtime import compute_cleanup
+
+    tracking = only is None
+    state_path = _state_path(job_path) if tracking else None
+    steps_state = {}  # step name -> {"status": "done"} | {"status": "in_progress", "checkpoint_step": N}
+    state_content = None
+    if tracking:
+        if _state_exists(state_path):
+            existing = _read_state(state_path)
+            # A still-alive recorded pid is refused unconditionally -- even with --resume, which
+            # is for continuing after a crash, not running a second instance alongside a live one.
+            # Two processes racing on the same checkpoint files is real corruption, not just
+            # wasted compute, so this check comes before the resume/no-resume branch below, not
+            # folded into it.
+            if existing is not None and _pid_alive(existing.get("pid")):
+                raise JobError(
+                    f"{state_path} records pid={existing['pid']}, which still appears to be "
+                    f"running -- refusing to start a second, concurrent run of the same job (this "
+                    f"applies even with --resume). If that process has genuinely exited and its "
+                    f"pid has since been reused by something unrelated, delete the job state file "
+                    f"to force a fresh start."
+                )
+            if not resume:
+                found = ", ".join(p for p in (state_path, state_path + ".old", state_path + ".tmp") if os.path.exists(p))
+                raise JobError(
+                    f"{found} already exists -- a previous run of this job may still be in "
+                    f"progress or crashed without cleanup. Pass --resume to continue it, or "
+                    f"delete it to force a fresh start."
+                )
+            steps_state = existing.get("steps", {}) if existing is not None else {}
+        state_content = _write_state(state_path, {
+            "job_path": os.path.abspath(job_path), "pid": os.getpid(), "started_at": time.time(),
+            "steps": steps_state,
+        })
+
+        def _record_progress(name: str, checkpoint_step: int) -> None:
+            nonlocal state_content
+            steps_state[name] = {"status": "in_progress", "checkpoint_step": checkpoint_step}
+            state_content = _write_state(state_path, dict(state_content, steps=steps_state))
+    else:
+        _record_progress = None
+
+    resume_hints = {name: s["checkpoint_step"] for name, s in steps_state.items()
+                     if s.get("status") == "in_progress" and "checkpoint_step" in s}
+
     # "device" is a COMMON_KEYS default, so every resolved step already carries it -- read it off
     # the first one rather than re-reading job["defaults"] directly, so a step-level override (an
     # unusual but valid case) is honored the same way the rest of a step's config is. One Context
     # is shared for the whole run: tinylab doesn't support switching devices mid-job.
     device_type = steps[0].get("device", "auto") if steps else "auto"
-    ctx = Context(device_type=device_type)
+    ctx = Context(device_type=device_type, resume=resume,
+                  _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress)
     results = []
     try:
         for step in steps:
+            if steps_state.get(step["name"], {}).get("status") == "done":
+                print(f"=== [{step['name']}] already completed, skipping (--resume) ===")
+                continue
             print(f"=== [{step['name']}] op={step['op']} ===")
             result = OPS[step["op"]].run(step, ctx)
             print(json.dumps(result))
             results.append(result)
+            steps_state[step["name"]] = {"status": "done"}
+            if tracking:
+                state_content = _write_state(state_path, dict(state_content, steps=steps_state))
     finally:
         compute_cleanup()
+    if tracking:
+        _remove_state(state_path)  # only reached on a clean run -- a raised exception leaves it in place
     return results

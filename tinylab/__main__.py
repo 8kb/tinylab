@@ -1,10 +1,12 @@
 """
 The entire tinylab CLI:
 
-    python -m tinylab <job.json> [--only NAME] [--dry-run]   # run the pipeline
-    python -m tinylab chat <job.json>                        # interactive chat
+    python -m tinylab <job.json> [--only NAME] [--dry-run] [--resume]   # run the pipeline
+    python -m tinylab chat <job.json>                                  # interactive chat
 
-Every other knob is a JSON key in the job file -- see README.md.
+Every other knob is a JSON key in the job file -- see README.md. `--resume` continues a previous,
+interrupted run of the same job file (see tinylab.job.run_file's docstring for the job state file
+mechanism); it cannot be combined with `--only`.
 """
 import sys
 
@@ -32,6 +34,7 @@ def main(argv=None):
     job_path = argv[0]
     only = None
     dry_run = False
+    resume = False
     rest = argv[1:]
     i = 0
     while i < len(rest):
@@ -43,13 +46,19 @@ def main(argv=None):
             only = rest[i]
         elif rest[i] == "--dry-run":
             dry_run = True
+        elif rest[i] == "--resume":
+            resume = True
         else:
             print(f"unrecognized argument: {rest[i]!r}\n\n{__doc__}", file=sys.stderr)
             return 2
         i += 1
 
+    if resume and only is not None:
+        print("error: --resume and --only cannot be combined\n\n" + __doc__, file=sys.stderr)
+        return 2
+
     try:
-        job_module.run_file(job_path, only=only, dry_run=dry_run)
+        job_module.run_file(job_path, only=only, dry_run=dry_run, resume=resume)
     except job_module.JobError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

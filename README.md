@@ -21,14 +21,18 @@ cd tinylab && uv sync --extra cpu --group dev
 ## The whole CLI
 
 ```
-python -m tinylab <job.json> [--only NAME] [--dry-run]   # run a pipeline
-python -m tinylab chat <job.json>                        # talk to what it trained
+python -m tinylab <job.json> [--only NAME] [--dry-run] [--resume]   # run a pipeline
+python -m tinylab chat <job.json>                                   # talk to what it trained
 ```
 
-That's it — two commands, no other flags. `--only NAME` re-runs one named step on its own (useful
-once that step's inputs, like a prepared dataset or an earlier checkpoint, already exist on disk).
-`--dry-run` validates the file and prints every step's fully resolved config without touching
-disk, the network, or a GPU.
+That's it — two commands, no other flags beyond these three. `--only NAME` re-runs one named step
+on its own (useful once that step's inputs, like a prepared dataset or an earlier checkpoint,
+already exist on disk). `--dry-run` validates the file and prints every step's fully resolved
+config without touching disk, the network, or a GPU. `--resume` continues a previous, interrupted
+run of the same job file — skips whichever steps already completed, and continues a `train` step's
+own training loop from its last periodic checkpoint (see `"save_every"` below) if it has one. It
+can't be combined with `--only`, and it's the one thing here that's a flag rather than a job-file
+key — see [`docs/architecture.md`](docs/architecture.md#resume-the-job-state-file).
 
 ## Quickstart
 
@@ -80,8 +84,9 @@ key, its meaning, and its default** — this example only shows a handful.
 | `op` | what it does |
 |---|---|
 | `prepare` | Tokenizes and packs a corpus into a dataset. `"kind": "base"` downloads ClimbMix shards; `"kind": "sft"` builds a SmolTalk + MMLU + GSM8K conversation mixture. |
-| `train` | One training loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a `source_tag`'d base checkpoint). |
+| `train` | One training loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a `source_tag`'d base checkpoint). `"save_every": N` checkpoints periodically, not just at the end. |
 | `bench` | Scores a checkpoint: `"suite": "core"` (DCLM's CORE benchmark) or `"suite": "chat"` (ARC, MMLU, GSM8K, HumanEval, plus the combined ChatCORE metric). |
+| `tokenizer` | Trains a fresh BPE vocab and writes it to `<base_dir>/tokenizer/`. Most job files never need this — tinylab ships a committed default vocab; if used, it has to be the first step. |
 
 ## Chatting
 
