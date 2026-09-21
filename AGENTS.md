@@ -13,10 +13,8 @@ reading this on GitHub — the modelcore/datacore/benchcore links are real GitHu
 anywhere.)
 
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
-`[tool.uv.sources]`: `modelcore` `v0.4.0`, `datacore` `v0.3.0`, `benchcore` `v0.2.1`. **The code in this
-tree needs `modelcore` `v0.5.0`** (`modelcore.v2` configs: `template`, `tokenizer`, comments, nested
-`mlp`) — bump the pin (and relock) once that tag exists; until then only a local editable install of
-`../modelcore` runs it.
+`[tool.uv.sources]`: `modelcore` `v0.5.0` (`modelcore.v2` configs), `datacore` `v0.3.0`, `benchcore`
+`v0.2.1`.
 
 ## Invariants owned elsewhere
 
