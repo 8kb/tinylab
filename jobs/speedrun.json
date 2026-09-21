@@ -15,8 +15,8 @@
     { "name": "sftdata", "op": "prepare", "kind": "sft" },
     { "name": "sft", "op": "train", "kind": "sft", "source_tag": "pre", "device_batch_size": 32,
       "total_batch_size": 524288, "eval_every": 200, "eval_tokens": 2097152 },
-    { "name": "core", "op": "bench", "suite": "core", "source": "sft", "model_tag": "sft" },
-    { "name": "chat_suite", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "sft" }
+    { "name": "core", "op": "bench", "suite": "core", "model_tag": "sft" },
+    { "name": "chat_suite", "op": "bench", "suite": "chat", "model_tag": "sft" }
   ],
-  "chat": { "source": "sft", "model_tag": "sft" }
+  "chat": { "model_tag": "sft" }
 }

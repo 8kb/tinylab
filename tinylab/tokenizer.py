@@ -14,6 +14,12 @@ from importlib import resources
 
 import tiktoken
 
+# Named tokenizers live side by side under <base_dir>/tokenizers/<name>/. `default` is the one tinylab
+# ships (default_tokenizer/), copied there on first use; every other name must already exist -- see
+# get_tokenizer.
+TOKENIZERS_DIR = "tokenizers"
+DEFAULT_TOKENIZER_NAME = "default"
+
 # Documents the special tokens baked into default_tokenizer/tokenizer.pkl -- not read at runtime
 # (encode_special looks them up by string literal against the loaded tiktoken.Encoding directly),
 # but useful as a single place a reader can see the full set without grepping.
@@ -141,6 +147,14 @@ class RustBPETokenizer:
     def decode_single_token_bytes(self, token_id):
         return self.enc.decode_single_token_bytes(token_id)
 
+    def descriptor(self, name):
+        """The opaque `tokenizer` block a checkpoint's model config carries (modelcore.ModelConfig.
+        tokenizer), so a checkpoint says which tokenizer it needs: `name` is the spec a job used to
+        select it (see resolve_tokenizer_dir), the rest is what identifies it. modelcore only
+        carries this -- tinylab.checkpoints.build_model is what checks it."""
+        return {"name": name, "fingerprint": self.fingerprint(), "vocab_size": self.get_vocab_size(),
+                "special_tokens": sorted(self.get_special_tokens())}
+
     def fingerprint(self):
         """Content hash of the vocab (first 16 hex chars of sha256 over every token's bytes, in id
         order) -- identifies *what a token id means*, not the file it happens to be pickled as.
@@ -256,16 +270,40 @@ def _bundled_default_tokenizer_dir():
     return str(resources.files("tinylab") / "default_tokenizer")
 
 
-def get_tokenizer(base_dir=None):
-    """Loads the tokenizer from <base_dir>/tokenizer/, copying tinylab's bundled default vocab
-    there on first use if nothing has been trained yet (mirrors nanochat's convention of a
-    repo-committed tokenizer, but does the copy in Python instead of requiring a shell step --
-    tinylab has no shell runners)."""
+def resolve_tokenizer_dir(spec=None, *, base_dir=None):
+    """Which directory a job's "tokenizer" value names: None -> the default tokenizer; a bare name ->
+    <base_dir>/tokenizers/<name>/; anything containing a path separator -> that path (the same
+    "a separator means a path" rule as model_config; tinylab.job has already made a relative one
+    absolute against the job file's own directory by the time it gets here)."""
     from tinylab.runtime import get_base_dir
-    base_dir = base_dir or get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
+    if spec is None:
+        spec = DEFAULT_TOKENIZER_NAME
+    if not isinstance(spec, str) or not spec.strip():
+        raise ValueError(f"tokenizer must be a non-empty name or path, got {spec!r}")
+    if "/" in spec or os.sep in spec:
+        return os.path.abspath(os.path.expanduser(spec))
+    if spec in (".", "..") or "\0" in spec:
+        raise ValueError(f"tokenizer name {spec!r} is not a valid directory name")
+    return os.path.join(base_dir or get_base_dir(), TOKENIZERS_DIR, spec)
+
+
+def get_tokenizer(base_dir=None, tokenizer=None):
+    """Loads the tokenizer `tokenizer` names (see resolve_tokenizer_dir; None -> the default).
+    Only the default one is ever materialized for you -- tinylab's bundled vocab is copied into
+    <base_dir>/tokenizers/default/ on first use (mirrors nanochat's convention of a repo-committed
+    tokenizer, but does the copy in Python instead of requiring a shell step -- tinylab has no
+    shell runners). Any other name that doesn't exist raises: silently handing back the default
+    vocab under a different name would pass every fingerprint check, since they would be
+    fingerprint-identical."""
+    tokenizer_dir = resolve_tokenizer_dir(tokenizer, base_dir=base_dir)
     pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
     if not os.path.exists(pickle_path):
+        if tokenizer is not None and tokenizer != DEFAULT_TOKENIZER_NAME:
+            raise FileNotFoundError(
+                f"tokenizer {tokenizer!r} not found at {tokenizer_dir} -- train one with a "
+                f"\"tokenizer\" step (its \"output\" key names where to write), or point "
+                f"\"tokenizer\" at an existing directory."
+            )
         os.makedirs(tokenizer_dir, exist_ok=True)
         bundled_dir = _bundled_default_tokenizer_dir()
         shutil.copy(os.path.join(bundled_dir, "tokenizer.pkl"), pickle_path)

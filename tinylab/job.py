@@ -18,6 +18,7 @@ import json
 import os
 import time
 
+from tinylab.checkpoints import validate_tag
 from tinylab.ops import COMMON_KEYS, OPS
 
 
@@ -85,10 +86,44 @@ def _resolve_model_config_path(step: dict, job_dir: str, *, where: str):
     step["model_config"] = abs_path
 
 
+def _resolve_tokenizer_specs(step: dict, job_dir: str, *, where: str):
+    """Mutates step's "tokenizer" (and a tokenizer op's "output") in place: a value containing a
+    path separator is a path, made absolute against the job file's own directory -- the same rule
+    "model_config" follows -- while a bare name is left as it is. No existence check: a "tokenizer"
+    step may be about to create it."""
+    for key in ("tokenizer", "output"):
+        if key not in step:
+            continue
+        value = step[key]
+        if not isinstance(value, str) or not value.strip():
+            raise JobError(f"{where}, {key!r}: must be a non-empty tokenizer name or path, got {value!r}")
+        if "/" in value or os.sep in value:
+            expanded = os.path.expanduser(value)
+            step[key] = expanded if os.path.isabs(expanded) else os.path.normpath(os.path.join(job_dir, expanded))
+
+
+def _check_checkpoint_tags(step: dict, *, where: str):
+    """A checkpoint tag is arbitrary text with optional "/" folders (see tinylab.checkpoints.
+    validate_tag) -- checked here so a bad one is a JobError up front, not a ValueError after a
+    prepare step has already spent an hour. A train step with no explicit "output_tag" uses its own
+    "name" as the tag, so that gets the same check."""
+    for key in ("output_tag", "source_tag", "model_tag"):
+        if key in step:
+            try:
+                validate_tag(step[key])
+            except ValueError as e:
+                raise JobError(f"{where}, {key!r}: {e}") from None
+    if step.get("op") == "train" and "output_tag" not in step:
+        try:
+            validate_tag(step["name"])
+        except ValueError as e:
+            raise JobError(f"{where}: this step has no \"output_tag\", so its \"name\" is its checkpoint tag -- {e}") from None
+
+
 def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> list[dict]:
     """Deep-merges defaults into every step, validates op + keys, and returns the resolved list
     (filtered to `only` if given). Raises JobError before anything is run. job_dir: the job file's
-    own directory, against which a relative "model.config" path resolves (default "" == cwd, for
+    own directory, against which a relative "model_config" or "tokenizer" path resolves (default "" == cwd, for
     callers that don't have a real job file path, e.g. most of this repo's own tests)."""
     defaults = job.get("defaults", {})
     steps = job["steps"]
@@ -113,6 +148,8 @@ def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> l
         accepted = OPS[op].accepted_keys(step) | COMMON_KEYS
         check_known_keys(step, accepted, where=where)
         _resolve_model_config_path(step, job_dir, where=where)
+        _resolve_tokenizer_specs(step, job_dir, where=where)
+        _check_checkpoint_tags(step, where=where)
         resolved.append(step)
 
     if only is not None:
@@ -122,10 +159,16 @@ def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> l
     return resolved
 
 
-def resolve_chat(job: dict) -> dict:
+def resolve_chat(job: dict, *, job_dir: str = "") -> dict:
     """Deep-merges defaults under the "chat" block. Returns {} if the job file has none -- callers
-    should treat that as "nothing to chat with configured", not a default source/tag guess."""
-    return _deep_merge(job.get("defaults", {}), job.get("chat", {}))
+    should treat that as "nothing to chat with configured", not a default tag guess. A path-form
+    "tokenizer" is made absolute against job_dir and a bad checkpoint tag is a JobError, the same
+    as for a step."""
+    cfg = _deep_merge(job.get("defaults", {}), job.get("chat", {}))
+    if cfg:
+        _resolve_tokenizer_specs(cfg, job_dir, where='"chat"')
+        _check_checkpoint_tags(cfg, where='"chat"')
+    return cfg
 
 
 def _state_path(job_path: str) -> str:
@@ -306,7 +349,10 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
     # unusual but valid case) is honored the same way the rest of a step's config is. One Context
     # is shared for the whole run: tinylab doesn't support switching devices mid-job.
     device_type = steps[0].get("device", "auto") if steps else "auto"
-    ctx = Context(device_type=device_type, resume=resume,
+    # Likewise "tokenizer": one per run, read off the first step (path-form values were already
+    # made absolute in resolve_steps).
+    tokenizer_spec = steps[0].get("tokenizer") if steps else None
+    ctx = Context(device_type=device_type, resume=resume, tokenizer_spec=tokenizer_spec,
                   _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress)
     results = []
     try:

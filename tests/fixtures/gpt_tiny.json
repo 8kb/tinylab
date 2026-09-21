@@ -1,9 +1,11 @@
 {
-  "format": "modelcore.v1",
+  "format": "modelcore.v2",
+  "_comment": "A 2-layer tree at sequence_len 32 for the slow tests (see tests/test_smoke.py); dumped via nanochat's scripts/model_info.py --arch gpt --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 32,
   "vocab_size": 32768,
   "n_embd": 64,
   "pad_vocab_size_to": 64,
+  "template": "base",
   "reference": {
     "preset": "gpt",
     "kwargs": {
@@ -17,7 +19,12 @@
   "shared": {
     "rope": {
       "#type": "rotary",
-      "head_dim": 16
+      "head_dim": 16,
+      "over_compute": 10
+    },
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
     }
   },
   "input": {
@@ -31,23 +38,34 @@
     "blocks": [
       {
         "#type": "gpt_block",
+        "_comment": "every block states its own mlp (activation + inner width) -- there are no defaults in modelcore.v2",
         "layer_idx": 0,
         "n_head": 4,
         "n_kv_head": 4,
-        "window": 128,
+        "window": -1,
         "has_value_embed": false,
         "resid_lambda_init": 1.15,
-        "x0_lambda_init": 0.2
+        "x0_lambda_init": 0.2,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 256
+        }
       },
       {
         "#type": "gpt_block",
         "layer_idx": 1,
         "n_head": 4,
         "n_kv_head": 4,
-        "window": 32,
+        "window": -1,
         "has_value_embed": true,
         "resid_lambda_init": 1.0499999999999998,
-        "x0_lambda_init": 0.05000000000000002
+        "x0_lambda_init": 0.05000000000000002,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 256
+        }
       }
     ]
   },

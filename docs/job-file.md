@@ -6,7 +6,10 @@ a key that's real for a different `kind`/`suite`) is a hard error with a did-you
 this list is exhaustive by construction: `tests/test_docs.py` fails if the code and this file
 disagree.
 
-A key starting with `_` (e.g. `"_comment"`, `"_note"`) is a freeform comment, ignored everywhere.
+A key starting with `_` (e.g. `"_comment"`, `"_note"`) is a freeform comment, ignored everywhere. The
+same convention holds inside a `model_config` file (a `modelcore.v2` config accepts `_` keys at every
+level and writes them back unchanged) — the `_` is what tells a comment apart from a mistyped
+parameter, which stays an error.
 
 `--resume` is the one exception to "everything is a JSON key" — it's a CLI flag
 (`python -m tinylab job.json --resume`), not a job-file key, since whether a given invocation is a
@@ -27,8 +30,9 @@ fresh start or a continuation is a fact about the invocation, not the pipeline. 
 |---|---|---|
 | `device` | `"cuda"` / `"mps"` / `"cpu"` / `"auto"`. One value for a whole run — read off the first resolved step, so put it in `defaults`. | `"auto"` |
 | `sequence_len` | Context length. Shared between `prepare` and `train`: a dataset is packed to a fixed `sequence_len`, and a `train` step raises if its own `sequence_len` doesn't match. Required by `prepare`/`train`; irrelevant to `bench`. | — |
-| `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
+| `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers, `"format": "modelcore.v2"`) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. A `modelcore.v1` file still loads (modelcore upgrades it). Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
 | `world_size` | The GPU count a `train` step's `total_batch_size`/grad-accum arithmetic assumes — checked against the actual launch (e.g. `torchrun --nproc_per_node`) and a hard error on mismatch, since the job file fixes GPU count rather than tinylab inferring it. Irrelevant to `prepare`/`bench`. Required by `train`. | — |
+| `tokenizer` | Which tokenizer the run uses: a **bare name** (`"bpe32k"` → `<base_dir>/tokenizers/bpe32k/`) or, if the value contains a path separator, a **path** (`"./toks/mine"`; relative paths resolve against the job file's own directory, like `model_config`). One value for a whole run — read off the first resolved step, so put it in `defaults`. The default one is tinylab's bundled vocab, copied to `<base_dir>/tokenizers/default/` on first use; any other name must already exist (train it with a `tokenizer` step). A checkpoint records which tokenizer it was trained with, so `bench`/`chat` pick it up on their own when this is unset, and refuse to load it with one whose fingerprint differs. | `"default"` |
 
 ## `prepare`
 
@@ -72,7 +76,7 @@ AGENTS.md.
 |---|---|---|---|
 | `kind` | `"base"` or `"sft"`. | required | both |
 | `dataset` | Which prepared dataset to train on. | same auto-name as `prepare` | both |
-| `output_tag` | Checkpoint tag this step writes to, under `<base_dir>/{base_checkpoints\|chatsft_checkpoints}/`. | the step's own `name` | both |
+| `output_tag` | Checkpoint tag this step writes to: `<base_dir>/checkpoints/<tag>/`. Arbitrary text, optionally with `/` folders (`gpt-d12-base`, `kvcache/d13-chat`) — see the glossary. An sft step's must differ from its own `source_tag`. | the step's own `name` | both |
 | `num_iterations` | Training horizon, in steps. | required (base) / one epoch over the dataset (sft, unset) | both |
 | `device_batch_size` | Micro-batch size per device, per forward/backward. | `4` | both |
 | `total_batch_size` | Tokens per optimizer step, across grad-accum and all ranks; must be a multiple of `device_batch_size * sequence_len * world_size`. | required | both |
@@ -95,17 +99,17 @@ AGENTS.md.
 | `doc_masking_max_docs_per_row` | Override `build_doc_args`'s default per-row document budget (`DEFAULT_MAX_DOCS_PER_ROW=64`). | unset | both |
 | `adapter_lr` | Learning rate for adapter (LoRA/DoRA A/B) params. Only meaningful when `model_config` carries `adapters`. | `modelcore.OptimizerHparams.adapter_lr` | both |
 | `adapter_scalar_lr` | Learning rate for DoRA's per-channel magnitude param. | `modelcore.OptimizerHparams.adapter_scalar_lr` | both |
-| `source` | Checkpoint namespace to read the starting weights from (`"base"` or `"sft"`). | `"base"` | sft |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |
 
 ## `tokenizer`
 
-Trains a fresh BPE vocab and writes it to `<base_dir>/tokenizer/`, overwriting whatever was there
-(the bundled default, or an earlier trained one) — no skip-if-exists guard. Most job files never
-need this: tinylab ships a committed default vocab. If used, put it first in `"steps"` — it must
-run before any earlier step has already read `ctx.tokenizer` (lazily loaded and cached on first
-use). No required keys; every default below matches nanochat's own `scripts/tok_train.py`.
+Trains a fresh BPE vocab and writes it to the tokenizer named by its `output` key — else the run's
+`tokenizer`, else the default — overwriting whatever was there (no skip-if-exists guard). Most job
+files never need this: tinylab ships a committed default vocab. If used, put it before any step that
+loads *that same* tokenizer (each is loaded once and cached on first use; a step that already loaded
+it makes this one raise). Training `"b"` after something loaded `"a"` is fine. No required keys; every
+default below matches nanochat's own `scripts/tok_train.py`.
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -113,17 +117,18 @@ use). No required keys; every default below matches nanochat's own `scripts/tok_
 | `vocab_size` | Target vocab size, including the 9 special tokens (appended after training, never trained themselves). Must leave at least 256 ordinary tokens. | `32768` |
 | `doc_cap` | Truncates any single document to this many characters before it reaches the trainer. | `10000` |
 | `max_chars` | Stops reading once this many characters (post-`doc_cap`) have been seen. | `2000000000` |
+| `output` | Which tokenizer to write: a bare name (`<base_dir>/tokenizers/<name>/`) or a path, same rule as the common `tokenizer` key. | the step's own `tokenizer`, else `"default"` |
 
 ## `bench`
 
 Scores a checkpoint. `"suite": "core"` runs DCLM's CORE benchmark; `"suite": "chat"` runs the ARC/
 MMLU/GSM8K/HumanEval chat-task suite plus the combined ChatCORE metric. Required: `suite`,
-`model_tag`.
+`model_tag`. The checkpoint's tokenizer is the run's `tokenizer` if set, else the one the checkpoint
+itself records.
 
 | Key | Meaning | Default | Which `suite` |
 |---|---|---|---|
 | `suite` | `"core"` or `"chat"`. | required | both |
-| `source` | Checkpoint namespace to load from (`"base"` or `"sft"`). | `"sft"` | both |
 | `model_tag` | Checkpoint tag to load. | required | both |
 | `model_step` | A specific step of that checkpoint, instead of its latest. | latest | both |
 | `max_per_task` | Caps examples per CORE task. Must leave enough for that task's own few-shot count, or benchcore's few-shot sampling raises — see `docs/architecture.md`. | unset (every example) | core |
@@ -141,7 +146,6 @@ Read by `python -m tinylab chat <job.json>`, not by the pipeline. Required: `mod
 
 | Key | Meaning | Default |
 |---|---|---|
-| `source` | Checkpoint namespace to load from (`"base"` or `"sft"`). | `"sft"` |
 | `model_tag` | Checkpoint tag to load. | required |
 | `model_step` | A specific step of that checkpoint, instead of its latest. | latest |
 | `temperature` | Sampling temperature. | `0.6` |
@@ -149,21 +153,25 @@ Read by `python -m tinylab chat <job.json>`, not by the pipeline. Required: `mod
 | `max_tokens` | Generation length cap, per turn. | `256` |
 | `prompt` | If present: send this one message, print the reply, and exit — instead of an interactive REPL. | unset (REPL) |
 
-## Glossary: `source`, `source_tag`, `model_tag`, `output_tag`
+## Glossary: `output_tag`, `source_tag`, `model_tag`, and what a tag is
 
-Four related but distinct ideas show up across `train`, `bench`, and `chat`:
+There is one checkpoint namespace, `<base_dir>/checkpoints/<tag>/`, and **the tag is the whole
+address**. It is arbitrary text, optionally with `/` folders: `gpt-d12-base`, `kvcache/d13-chat`,
+`experiments/2026-09/run3`. What *kind* of checkpoint it is — pretrained, fine-tuned, whatever comes
+next — is yours to say in the tag; nothing in the path encodes it. (Rejected: an empty tag, an
+absolute one, a backslash, and any empty, `.` or `..` segment.)
 
-- **`output_tag`** (a `train` step): the checkpoint tag this step *writes to*. Defaults to the
-  step's own `name`.
-- **`source_tag`** (a `train` step with `kind: sft`): the checkpoint tag this step *reads its
-  starting weights from* — normally an earlier `kind: base` step's `output_tag`.
-- **`source`** (`train`/`bench`/`chat`): which checkpoint *namespace* to read from, `"base"` or
-  `"sft"` — two separate directories, since a base (pretrained) checkpoint and an SFT (fine-tuned)
-  checkpoint are never the same tag.
-- **`model_tag`** (`bench`/`chat`): the checkpoint tag to load, inside whichever `source`
-  namespace — the read-side counterpart to `output_tag`.
+Three job keys name a tag, and all three are complete addresses:
+
+- **`output_tag`** (a `train` step): the tag this step *writes to*. Defaults to the step's own
+  `name`.
+- **`source_tag`** (a `train` step with `kind: sft`): the tag this step *reads its starting weights
+  from* — normally an earlier `kind: base` step's `output_tag`. Must differ from that step's own
+  `output_tag`.
+- **`model_tag`** (`bench`/`chat`): the tag to load — the read-side counterpart to `output_tag`.
 
 A pipeline has no dependency graph; each step names what it needs by tag instead. In
 `jobs/smoke.json`, `"sft"` finds `"pre"`'s checkpoint via `"source_tag": "pre"`, and the `"core"`
 bench step finds `"sft"`'s checkpoint via `"model_tag": "sft"` — that works only because a `train`
-step's output tag defaults to its own step name.
+step's output tag defaults to its own step name. Give steps explicit tags when you want the name to
+say more (`"output_tag": "gpt-d12-base"`).

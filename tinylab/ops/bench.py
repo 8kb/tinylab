@@ -11,7 +11,7 @@ from tinylab.runtime import get_base_dir, print0
 # Keys shared by both suites, plus each suite's own -- see accepted_keys() below, which is
 # suite-aware so e.g. "max_per_task" (a CORE-only concept) on a suite="chat" step is caught as an
 # error rather than silently accepted and ignored.
-_COMMON_KEYS = {"suite", "source", "model_tag", "model_step"}
+_COMMON_KEYS = {"suite", "model_tag", "model_step"}
 _CORE_KEYS = {"max_per_task"}
 _CHAT_KEYS = {"tasks", "batch_size", "num_samples", "max_new_tokens", "temperature", "top_k", "max_problems"}
 
@@ -23,12 +23,11 @@ def accepted_keys(cfg: dict) -> set:
 
 
 def _load(cfg, ctx):
-    """Loads the checkpoint cfg names: cfg["source"] ("base"|"sft", default "sft") is the tag
-    namespace, cfg["model_tag"] the tag within it, cfg["model_step"] a specific step (default:
-    latest). Returns (model, tokenizer, meta_data)."""
+    """Loads the checkpoint cfg names: cfg["model_tag"] is its whole address, cfg["model_step"] a
+    specific step (default: latest). Returns (model, tokenizer, meta_data)."""
     assert "model_tag" in cfg, "bench: 'model_tag' is required"
-    source = cfg.get("source", "sft")
-    return checkpoints.load_model(source, ctx.device, phase="eval", model_tag=cfg["model_tag"], step=cfg.get("model_step"))
+    return checkpoints.load_model(cfg["model_tag"], ctx.device, phase="eval", step=cfg.get("model_step"),
+                                  tokenizer_spec=ctx.tokenizer_spec)
 
 
 def _run_core(cfg, ctx, model, tokenizer):

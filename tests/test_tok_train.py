@@ -4,6 +4,8 @@ corpus) and the `tokenizer` op's own plumbing (real rustbpe training, but agains
 parquet fixture instead of a real ClimbMix download)."""
 import os
 
+import pytest
+
 from tinylab.ops import Context
 from tinylab.ops.tokenizer import run as tokenizer_run
 from tinylab.tokenizer import SPECIAL_TOKENS, RustBPETokenizer
@@ -84,7 +86,8 @@ def test_tokenizer_op_trains_and_writes_a_real_tokenizer_against_a_local_fixture
     assert result["vocab_size"] == _MIN_VOCAB_SIZE + 10
     assert not downloaded  # the fixture file already exists -- no download should have been attempted
 
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
+    tokenizer_dir = os.path.join(base_dir, "tokenizers", "default")
+    assert result["output"] == tokenizer_dir
     assert os.path.exists(os.path.join(tokenizer_dir, "tokenizer.pkl"))
     assert os.path.exists(os.path.join(tokenizer_dir, "token_bytes.pt"))
 
@@ -109,3 +112,54 @@ def test_tokenizer_op_downloads_missing_shards(base_dir, monkeypatch):
     cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1}
     tokenizer_run(cfg, Context(device_type="cpu"))
     assert downloaded == [1]
+
+
+def _patch_fixture_shards(base_dir, monkeypatch):
+    train_path, val_path = _write_fake_climbmix_parquet(base_dir)
+    from tinylab import data
+    monkeypatch.setattr(data, "climbmix_train_val_paths", lambda num_train_shards: ([train_path], [val_path]))
+    monkeypatch.setattr(data, "download_climbmix_shards", lambda n, num_workers=4, log=print: None)
+
+
+def test_tokenizer_op_writes_to_the_named_output_and_leaves_the_default_alone(base_dir, monkeypatch):
+    _patch_fixture_shards(base_dir, monkeypatch)
+    from tinylab.tokenizer import get_tokenizer
+
+    bundled_vocab = get_tokenizer(base_dir).get_vocab_size()
+    cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1, "output": "small"}
+    result = tokenizer_run(cfg, Context(device_type="cpu"))
+
+    assert result["output"] == os.path.join(base_dir, "tokenizers", "small")
+    assert get_tokenizer(base_dir, tokenizer="small").get_vocab_size() == _MIN_VOCAB_SIZE + 10
+    assert get_tokenizer(base_dir).get_vocab_size() == bundled_vocab  # the default is untouched
+
+
+def test_tokenizer_op_defaults_its_output_to_the_runs_tokenizer(base_dir, monkeypatch):
+    _patch_fixture_shards(base_dir, monkeypatch)
+    from tinylab.tokenizer import get_tokenizer
+
+    cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1, "tokenizer": "mine"}
+    tokenizer_run(cfg, Context(device_type="cpu", tokenizer_spec="mine"))
+    assert get_tokenizer(base_dir, tokenizer="mine").get_vocab_size() == _MIN_VOCAB_SIZE + 10
+
+
+def test_tokenizer_op_refuses_to_overwrite_one_this_run_already_loaded(base_dir, monkeypatch):
+    """The per-name form of "a tokenizer step must come first": a step that already loaded
+    "default" would keep using its in-memory copy while the new vocab on disk went unused."""
+    _patch_fixture_shards(base_dir, monkeypatch)
+    ctx = Context(device_type="cpu")
+    ctx.tokenizer  # an earlier step loads the default tokenizer
+    cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1}
+    with pytest.raises(RuntimeError, match="already loaded"):
+        tokenizer_run(cfg, ctx)
+    # ...but training a *different* name is fine.
+    tokenizer_run(dict(cfg, output="other"), ctx)
+
+
+def test_context_caches_one_tokenizer_per_directory(base_dir):
+    from tinylab.tokenizer import get_tokenizer
+    get_tokenizer(base_dir).save(os.path.join(base_dir, "tokenizers", "copy"))
+    ctx = Context(device_type="cpu")
+    assert ctx.tokenizer is ctx.tokenizer_for(None) is ctx.tokenizer_for("default")
+    assert ctx.tokenizer_for("copy") is not ctx.tokenizer
+    assert ctx.tokenizer_name == "default" and Context(tokenizer_spec="copy").tokenizer_name == "copy"

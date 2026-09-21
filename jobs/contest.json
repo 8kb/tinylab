@@ -24,9 +24,9 @@
     { "name": "kvshare_sft", "op": "train", "kind": "sft", "source_tag": "kvshare_base", "device_batch_size": 64,
       "total_batch_size": 524288, "eval_every": 200, "eval_tokens": 2097152 },
 
-    { "name": "gpt_core", "op": "bench", "suite": "core", "source": "base", "model_tag": "gpt_base" },
-    { "name": "kvshare_core", "op": "bench", "suite": "core", "source": "base", "model_tag": "kvshare_base" },
-    { "name": "gpt_chat", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "gpt_sft" },
-    { "name": "kvshare_chat", "op": "bench", "suite": "chat", "source": "sft", "model_tag": "kvshare_sft" }
+    { "name": "gpt_core", "op": "bench", "suite": "core", "model_tag": "gpt_base" },
+    { "name": "kvshare_core", "op": "bench", "suite": "core", "model_tag": "kvshare_base" },
+    { "name": "gpt_chat", "op": "bench", "suite": "chat", "model_tag": "gpt_sft" },
+    { "name": "kvshare_chat", "op": "bench", "suite": "chat", "model_tag": "kvshare_sft" }
   ]
 }

@@ -156,23 +156,64 @@ with a compatible tokenizer.
 
 ```
 <base_dir>/
-  tokenizer/                 tokenizer.pkl (+ token_bytes.pt), copied from the bundled default on
-                             first use, or written by a "tokenizer" step
+  tokenizers/<name>/         tokenizer.pkl (+ token_bytes.pt). Any number side by side; "default" is
+                             copied from the bundled vocab on first use, every other name comes
+                             from a "tokenizer" step
   base_data_climbmix/        downloaded ClimbMix parquet shards
   prepared/<dataset_name>/   a datacore dataset: packed sequences + manifest
-  base_checkpoints/<tag>/    model_<step>.pt, meta_<step>.json (its own "model_config" key holds
+  checkpoints/<tag>/         model_<step>.pt, meta_<step>.json (its own "model_config" key holds
                              the tree -- there is no separate config_<step>.json file),
-                             optim_<step>_rank<r>.pt; multiple steps coexist with no pruning
-  chatsft_checkpoints/<tag>/ same shape, for SFT checkpoints
+                             optim_<step>_rank<r>.pt; multiple steps coexist with no pruning.
+                             <tag> is arbitrary text and may contain "/" folders
+                             ("gpt-d12-base", "kvcache/d13-chat")
   job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
 ```
+
+### Checkpoint tags: one namespace, the tag is the address
+
+There used to be `base_checkpoints/` and `chatsft_checkpoints/`, chosen by a `source` job key. Two
+kinds today, more later — a new directory (and a new `source` value) per kind doesn't scale — so
+there is now one `checkpoints/` directory and the *tag* says what a checkpoint is. `output_tag`,
+`source_tag` and `model_tag` are each a complete address; `tinylab.checkpoints.resolve_checkpoint_dir`
+turns one into a path and `validate_tag` rejects anything that could escape it (empty, absolute,
+backslash, an empty/`.`/`..` segment). `job.resolve_steps` runs the same check up front, so a bad tag
+is a `JobError` before a `prepare` step has spent an hour, not a `ValueError` after.
+
+One consequence to know: base and sft used to be able to share a tag because they lived in different
+directories (nanochat's convention reuses `d12` for both). They can't now, so an sft step whose
+`output_tag` equals its own `source_tag` is refused outright, rather than reading its starting weights
+from, and writing its result into, the same directory.
+
+### Several tokenizers
+
+A job's `"tokenizer"` (a `COMMON_KEYS` entry, so it lives in `defaults`) is a bare name —
+`<base_dir>/tokenizers/<name>/` — or, if it contains a path separator, a path (relative ones made
+absolute against the job file's own directory in `job.resolve_steps`, the same rule `model_config`
+follows). `Context.tokenizer_for(spec)` loads and memoizes one instance *per resolved directory*;
+`Context.tokenizer` is the run's own. It is one tokenizer per run, read off the first step like
+`"device"` — a per-step tokenizer would break the dataset↔model fingerprint agreement a run depends on.
+
+Only the `default` tokenizer is ever created for you (copied from the bundled vocab). A missing
+*named* one raises instead of copying the bundled vocab under that name: the two would be
+fingerprint-identical, so no check downstream could tell the user got the wrong tokenizer.
+
+A checkpoint records which tokenizer it was trained with — `ops.train` writes
+`model_config["tokenizer"] = {"name", "fingerprint", "vocab_size", "special_tokens"}` (modelcore
+carries that block opaquely; see its own docs) — and `checkpoints.build_model` resolves the tokenizer
+to load in order: the run's `"tokenizer"` if set, else that recorded name, else the default. The
+existing vocab-size assert and fingerprint check then catch a wrong *selection*.
+
+`ops.train` also stamps `template`: a `kind: sft` checkpoint declares `"nanochat"` (the chat format
+`tinylab.tokenizer.render_conversation` renders), a base one keeps whatever its `model_config` said.
+Declarative only for now — modelcore validates it is a known template and nothing else reads it.
 
 `meta_<step>.json` carries: `step`, `val_bpb`, `tokenizer_fingerprint`, `model_config` (the
 materialized tree this checkpoint was built from), `user_config` (the resolved job-file step, minus
 `"model_config"` — that would just duplicate the sibling `model_config` key under a different,
 unresolved shape), `device_batch_size`, `max_seq_len`, `total_batch_size`, `dataloader_state_dict`
 (a datacore resume cursor -- see "Resume" above), `total_training_time`, and for SFT checkpoints,
-`base_model_tag`/`base_model_step`. `tinylab.checkpoints.build_model` cross-checks
+`base_model_tag`/`base_model_step`. `model_config` is a `modelcore.v2` tree, including its `template`
+and `tokenizer` blocks. `tinylab.checkpoints.build_model` cross-checks
 `tokenizer_fingerprint` against the currently-loaded tokenizer before returning a model — a vocab-
 size match alone isn't enough to prove two tokenizers assign ids the same way.
 

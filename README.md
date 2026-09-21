@@ -61,9 +61,9 @@ point is to prove the plumbing works end to end, not to produce something worth 
     { "name": "pre",  "op": "train",   "kind": "base", "num_iterations": 30, "device_batch_size": 1, "total_batch_size": 2048, "eval_tokens": 2048 },
     { "name": "sftdata", "op": "prepare", "kind": "sft", "max_conversations": 200 },
     { "name": "sft",  "op": "train",   "kind": "sft", "source_tag": "pre", "num_iterations": 20, "device_batch_size": 1, "total_batch_size": 2048, "eval_tokens": 2048 },
-    { "name": "core", "op": "bench",   "suite": "core", "source": "sft", "model_tag": "sft", "max_per_task": 24 }
+    { "name": "core", "op": "bench",   "suite": "core", "model_tag": "sft", "max_per_task": 24 }
   ],
-  "chat": { "source": "sft", "model_tag": "sft", "temperature": 0.6 }
+  "chat": { "model_tag": "sft", "temperature": 0.6 }
 }
 ```
 
@@ -86,7 +86,7 @@ key, its meaning, and its default** — this example only shows a handful.
 | `prepare` | Tokenizes and packs a corpus into a dataset. `"kind": "base"` downloads ClimbMix shards; `"kind": "sft"` builds a SmolTalk + MMLU + GSM8K conversation mixture. |
 | `train` | One training loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a `source_tag`'d base checkpoint). `"save_every": N` checkpoints periodically, not just at the end. |
 | `bench` | Scores a checkpoint: `"suite": "core"` (DCLM's CORE benchmark) or `"suite": "chat"` (ARC, MMLU, GSM8K, HumanEval, plus the combined ChatCORE metric). |
-| `tokenizer` | Trains a fresh BPE vocab and writes it to `<base_dir>/tokenizer/`. Most job files never need this — tinylab ships a committed default vocab; if used, it has to be the first step. |
+| `tokenizer` | Trains a fresh BPE vocab and writes it to the tokenizer it names (`"output"`, else the run's `"tokenizer"`, else `default`) under `<base_dir>/tokenizers/`. Most job files never need this — tinylab ships a committed default vocab; if used, it has to come before any step that loads that same tokenizer. |
 
 ## Chatting
 

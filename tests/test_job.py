@@ -421,3 +421,107 @@ def test_device_propagates_to_every_op_not_just_chat(tmp_path, monkeypatch):
 
     job.run_file(path)
     assert seen["device_type"] == "cpu"
+
+
+# -- checkpoint tags (one namespace; the tag is the whole address) ------------------------------
+
+def _train_job(**step_overrides):
+    step = {"name": "a", "op": "train", "kind": "base", "sequence_len": 8}
+    step.update(step_overrides)
+    return {"steps": [step]}
+
+
+@pytest.mark.parametrize("key", ["output_tag", "source_tag", "model_tag"])
+@pytest.mark.parametrize("bad", ["", "/abs", "a//b", "a/", "/a", "../x", "a/../b", "./a", "a\\b"])
+def test_a_malformed_checkpoint_tag_is_a_job_error_before_anything_runs(tmp_path, key, bad):
+    op_step = {"op": "bench", "suite": "core"} if key == "model_tag" else {"op": "train", "kind": "sft"}
+    doc = {"steps": [dict({"name": "a", "sequence_len": 8}, **op_step, **{key: bad})]}
+    with pytest.raises(job.JobError, match=key):
+        job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+
+
+@pytest.mark.parametrize("good", ["gpt-d12-base", "kvcache/d13-chat", "exp/2026-09/run.3", "d12", "a b"])
+def test_any_reasonable_checkpoint_tag_is_accepted(tmp_path, good):
+    doc = _train_job(output_tag=good)
+    assert job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))[0]["output_tag"] == good
+
+
+def test_a_train_steps_name_is_checked_when_it_doubles_as_its_tag(tmp_path):
+    doc = _train_job(name="a/../b")
+    with pytest.raises(job.JobError, match="no .output_tag., so its .name. is its checkpoint tag"):
+        job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+    # ...but not when an explicit output_tag takes over that role
+    job.resolve_steps(job.load(_write_job(tmp_path, _train_job(name="a/../b", output_tag="ok"))), job_dir=str(tmp_path))
+
+
+def test_the_source_key_is_gone(tmp_path):
+    """The base/sft namespace split is replaced by tags: a job still saying "source" is told so."""
+    for step in ({"name": "a", "op": "bench", "suite": "core", "model_tag": "t", "source": "sft"},
+                 {"name": "a", "op": "train", "kind": "sft", "sequence_len": 8, "source_tag": "t", "source": "base"}):
+        with pytest.raises(job.JobError, match="unknown key 'source'"):
+            job.resolve_steps(job.load(_write_job(tmp_path, {"steps": [step]})), job_dir=str(tmp_path))
+
+
+def test_chat_block_rejects_source_and_bad_tags(tmp_path):
+    from tinylab import chat
+    j = job.load(_write_job(tmp_path, {"steps": [], "chat": {"model_tag": "t", "source": "sft"}}))
+    cfg = job.resolve_chat(j, job_dir=str(tmp_path))
+    with pytest.raises(job.JobError, match="unknown key 'source'"):
+        job.check_known_keys(cfg, chat.ACCEPTED_KEYS | job.COMMON_KEYS, where='"chat"')
+    with pytest.raises(job.JobError, match="model_tag"):
+        job.resolve_chat(job.load(_write_job(tmp_path, {"steps": [], "chat": {"model_tag": "../x"}})), job_dir=str(tmp_path))
+
+
+# -- tokenizer selection ------------------------------------------------------------------------
+
+def test_a_bare_tokenizer_name_is_left_alone_and_a_path_is_made_absolute_against_the_job_dir(tmp_path):
+    for value, expected in (("bpe32k", "bpe32k"),
+                            ("./toks/mine", os.path.join(str(tmp_path), "toks", "mine")),
+                            ("../shared/toks", os.path.normpath(os.path.join(str(tmp_path), "..", "shared", "toks"))),
+                            ("/opt/toks", "/opt/toks")):
+        doc = {"defaults": {"tokenizer": value}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+        steps = job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+        assert steps[0]["tokenizer"] == expected, value
+
+
+def test_a_tokenizer_paths_need_not_exist_yet(tmp_path):
+    """Unlike model_config: a "tokenizer" step may be about to create it."""
+    doc = {"defaults": {"tokenizer": "./not/yet"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 3, None])
+def test_a_non_string_tokenizer_is_a_job_error(tmp_path, bad):
+    doc = {"defaults": {"tokenizer": bad}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    with pytest.raises(job.JobError, match="tokenizer"):
+        job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+
+
+def test_tokenizer_output_key_belongs_to_the_tokenizer_op_only(tmp_path):
+    ok = {"steps": [{"name": "t", "op": "tokenizer", "output": "./toks/new"}]}
+    assert job.resolve_steps(job.load(_write_job(tmp_path, ok)), job_dir=str(tmp_path))[0]["output"] == os.path.join(str(tmp_path), "toks", "new")
+    bad = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8, "output": "x"}]}
+    with pytest.raises(job.JobError, match="unknown key 'output'"):
+        job.resolve_steps(job.load(_write_job(tmp_path, bad)), job_dir=str(tmp_path))
+
+
+def test_chat_blocks_tokenizer_path_resolves_against_the_job_dir(tmp_path):
+    doc = {"defaults": {"tokenizer": "./toks/mine"}, "steps": [], "chat": {"model_tag": "sft"}}
+    cfg = job.resolve_chat(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
+    assert cfg["tokenizer"] == os.path.join(str(tmp_path), "toks", "mine")
+
+
+def test_the_run_wide_tokenizer_reaches_every_ops_context(tmp_path, base_dir, monkeypatch):
+    """Like "device": read off the first resolved step, so it lives in defaults."""
+    doc = {"defaults": {"device": "cpu", "sequence_len": 8, "tokenizer": "bpe32k"},
+           "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}]}
+    seen = {}
+    def fake_run(cfg, ctx):
+        seen["spec"], seen["name"] = ctx.tokenizer_spec, ctx.tokenizer_name
+        return {"op": "prepare"}
+    monkeypatch.setattr("tinylab.ops.prepare.run", fake_run)
+    job.run_file(_write_job(tmp_path, doc))
+    assert seen == {"spec": "bpe32k", "name": "bpe32k"}
+    doc["defaults"].pop("tokenizer")
+    job.run_file(_write_job(tmp_path, doc))
+    assert seen == {"spec": None, "name": "default"}

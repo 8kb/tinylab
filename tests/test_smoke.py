@@ -78,11 +78,17 @@ def test_train_then_load_then_generate(base_dir):
 
     assert result["output_tag"] == "pre"
     assert result["val_bpb"] is not None and result["val_bpb"] > 0
-    checkpoint_dir = os.path.join(base_dir, "base_checkpoints", "pre")
+    checkpoint_dir = os.path.join(base_dir, "checkpoints", "pre")
     assert os.path.isdir(checkpoint_dir)
 
-    model, loaded_tokenizer, meta = load_model("base", torch.device("cpu"), phase="eval", model_tag="pre")
+    model, loaded_tokenizer, meta = load_model("pre", torch.device("cpu"), phase="eval")
     assert meta["val_bpb"] == pytest.approx(result["val_bpb"])
+    # The checkpoint says which tokenizer it needs, and how it is talked to (a base run keeps the
+    # template its model_config named).
+    saved = meta["model_config"]
+    assert saved["format"] == "modelcore.v2" and saved["template"] == "base"
+    assert saved["tokenizer"] == tokenizer.descriptor("default")
+    assert saved["tokenizer"]["fingerprint"] == loaded_tokenizer.fingerprint() == meta["tokenizer_fingerprint"]
     model.eval()
 
     engine = Engine(model, loaded_tokenizer)
@@ -92,3 +98,39 @@ def test_train_then_load_then_generate(base_dir):
     # generate_batch seeds `results` with the prompt itself (engine.py), so ">=" would pass even
     # if nothing were generated at all -- assert strictly more came back, i.e. a real continuation.
     assert len(results[0]) > len(prompt)
+
+
+def test_sft_step_reads_one_tag_writes_another_and_declares_the_chat_template(base_dir):
+    """The flat checkpoint namespace end to end: an sft step reads a base tag, writes a *nested* tag,
+    records its provenance, and stamps the nanochat template (a base run keeps "base")."""
+    tokenizer = get_tokenizer(base_dir)
+    sequence_len = 32
+    _prepare_fake_dataset(base_dir, tokenizer, sequence_len)
+    ctx = Context(device_type="cpu")
+    common = {"op": "train", "dataset": "smoke", "sequence_len": sequence_len, "device_batch_size": 2,
+              "total_batch_size": 64, "world_size": 1, "eval_every": 2, "eval_tokens": 64}
+    train_run(dict(common, name="pre", kind="base", model_config=_TINY_GPT_CONFIG, num_iterations=2), ctx)
+    result = train_run(dict(common, name="chat", kind="sft", source_tag="pre", output_tag="kvcache/d13-chat",
+                            num_iterations=2), ctx)
+
+    assert result["output_tag"] == "kvcache/d13-chat"
+    assert os.path.isdir(os.path.join(base_dir, "checkpoints", "kvcache", "d13-chat"))
+    _, _, base_meta = load_model("pre", torch.device("cpu"), phase="eval")
+    _, _, sft_meta = load_model("kvcache/d13-chat", torch.device("cpu"), phase="eval")
+    assert base_meta["model_config"]["template"] == "base"
+    assert sft_meta["model_config"]["template"] == "nanochat"
+    assert sft_meta["base_model_tag"] == "pre"
+    assert sft_meta["model_config"]["tokenizer"] == tokenizer.descriptor("default")
+
+
+def test_sft_step_may_not_write_into_its_own_source_tag(base_dir):
+    """One namespace means a base and an sft checkpoint can no longer share a tag by living in
+    different directories (nanochat reuses "d12" for both) -- refuse before touching anything."""
+    cfg = {"name": "chat", "op": "train", "kind": "sft", "sequence_len": 32, "total_batch_size": 64, "eval_tokens": 64,
+           "world_size": 1, "source_tag": "d12", "output_tag": "d12"}
+    with pytest.raises(AssertionError, match="output_tag == source_tag"):
+        train_run(cfg, Context(device_type="cpu"))
+    by_name_default = {k: v for k, v in cfg.items() if k != "output_tag"}
+    by_name_default["name"] = "d12"  # no output_tag: the step's own name is the tag, and it equals source_tag
+    with pytest.raises(AssertionError, match="output_tag == source_tag"):
+        train_run(by_name_default, Context(device_type="cpu"))

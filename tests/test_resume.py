@@ -66,7 +66,7 @@ def test_resume_continues_bit_exactly_from_an_interrupted_step(base_dir):
 
     continuous = train_run(dict(_base_cfg(sequence_len), num_iterations=6), Context(device_type="cpu", resume=False))
 
-    checkpoint_dir = os.path.join(base_dir, "base_checkpoints", "pre")
+    checkpoint_dir = os.path.join(base_dir, "checkpoints", "pre")
     for name in os.listdir(checkpoint_dir):
         os.remove(os.path.join(checkpoint_dir, name))
 
@@ -97,7 +97,7 @@ def test_resume_world_size_mismatch_is_a_hard_error(base_dir):
     _prepare_fake_dataset(base_dir, tokenizer, sequence_len)
 
     train_run(dict(_base_cfg(sequence_len), num_iterations=3), Context(device_type="cpu", resume=False))
-    checkpoint_dir = os.path.join(base_dir, "base_checkpoints", "pre")
+    checkpoint_dir = os.path.join(base_dir, "checkpoints", "pre")
     meta_path = os.path.join(checkpoint_dir, "meta_000003.json")
     with open(meta_path) as f:
         meta = json.load(f)
@@ -115,7 +115,7 @@ def test_resume_missing_optimizer_shard_is_a_hard_error(base_dir):
     _prepare_fake_dataset(base_dir, tokenizer, sequence_len)
 
     train_run(dict(_base_cfg(sequence_len), num_iterations=3), Context(device_type="cpu", resume=False))
-    checkpoint_dir = os.path.join(base_dir, "base_checkpoints", "pre")
+    checkpoint_dir = os.path.join(base_dir, "checkpoints", "pre")
     os.remove(os.path.join(checkpoint_dir, "optim_000003_rank0.pt"))
 
     with pytest.raises(AssertionError, match="refusing to resume with a freshly-initialized optimizer"):
@@ -159,7 +159,7 @@ def test_resume_through_job_ignores_a_checkpoint_that_never_finished_saving(base
     with pytest.raises(RuntimeError, match="simulated crash mid-checkpoint-write"):
         job.run_file(job_path)
 
-    checkpoint_dir = os.path.join(base_dir, "base_checkpoints", "pre")
+    checkpoint_dir = os.path.join(base_dir, "checkpoints", "pre")
     assert os.path.exists(os.path.join(checkpoint_dir, "model_000006.pt"))            # written...
     assert not os.path.exists(os.path.join(checkpoint_dir, "optim_000006_rank0.pt"))  # ...but incomplete
     assert os.path.exists(os.path.join(checkpoint_dir, "optim_000003_rank0.pt"))      # step 3 is fully intact

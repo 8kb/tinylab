@@ -1,9 +1,11 @@
 {
-  "format": "modelcore.v1",
+  "format": "modelcore.v2",
+  "_comment": "Dumped once via nanochat's scripts/model_info.py --arch llama_kvshare_win --depth 12 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --arch-opt kv_share_frac=0.5 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 2048,
   "vocab_size": 32768,
   "n_embd": 768,
   "pad_vocab_size_to": 64,
+  "template": "base",
   "reference": {
     "preset": "llama_kvshare_win",
     "kwargs": {
@@ -18,7 +20,12 @@
   "shared": {
     "rope": {
       "#type": "rotary",
-      "head_dim": 128
+      "head_dim": 128,
+      "over_compute": 10
+    },
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
     }
   },
   "input": {
@@ -35,7 +42,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 0,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -44,7 +56,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 1,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -53,16 +70,26 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 2,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
         "layer_idx": 3,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "kv_slot": 3,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -71,7 +98,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 4,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -80,7 +112,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 5,
-        "produces_kv": true
+        "produces_kv": true,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -89,16 +126,26 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
         "layer_idx": 7,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -107,7 +154,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -116,7 +168,12 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
@@ -125,16 +182,26 @@
         "n_kv_head": 6,
         "window": 512,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       },
       {
         "#type": "plain_block",
         "layer_idx": 11,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "kv_slot": 5,
-        "produces_kv": false
+        "produces_kv": false,
+        "mlp": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 2048
+        }
       }
     ]
   },

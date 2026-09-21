@@ -13,7 +13,7 @@
     { "name": "sftdata", "op": "prepare", "kind": "sft", "max_conversations": 200, "mmlu_epochs": 1, "gsm8k_epochs": 1 },
     { "name": "sft", "op": "train", "kind": "sft", "source_tag": "pre", "num_iterations": 20,
       "device_batch_size": 1, "total_batch_size": 2048, "eval_every": 10, "eval_tokens": 2048 },
-    { "name": "core", "op": "bench", "suite": "core", "source": "sft", "model_tag": "sft", "max_per_task": 24 }
+    { "name": "core", "op": "bench", "suite": "core", "model_tag": "sft", "max_per_task": 24 }
   ],
-  "chat": { "source": "sft", "model_tag": "sft", "temperature": 0.6, "top_k": 50, "max_tokens": 128 }
+  "chat": { "model_tag": "sft", "temperature": 0.6, "top_k": 50, "max_tokens": 128 }
 }

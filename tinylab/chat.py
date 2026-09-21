@@ -1,32 +1,34 @@
 """
 `python -m tinylab chat <job.json>` -- interactive chat, driven by a job file's sibling "chat"
-block rather than its own flags (the same file that trained the model already names its base dir,
-checkpoint source and tag). Deliberately a separate command, not a job op -- see AGENTS.md. See
+block rather than its own flags (the same file that trained the model already names its base dir
+and checkpoint tag). Deliberately a separate command, not a job op -- see AGENTS.md. See
 docs/job-file.md's "chat" table for every key this module reads.
 
 Conversation rendering follows nanochat's scripts/chat_cli.py convention, driving the same
 tinylab.engine.Engine the `bench` op hands to benchcore as its Generator, so the interactive path
 and the scored path exercise identical decoding code.
 """
+import os
+
 from tinylab import checkpoints, job
 from tinylab.engine import Engine
 from tinylab.ops import COMMON_KEYS, Context
 from tinylab.runtime import compute_cleanup, print0
 
-ACCEPTED_KEYS = {"source", "model_tag", "model_step", "temperature", "top_k", "max_tokens", "prompt"}
+ACCEPTED_KEYS = {"model_tag", "model_step", "temperature", "top_k", "max_tokens", "prompt"}
 
 
 def main(job_path: str):
     """Loads job_path, resolves its "chat" block (defaults deep-merged in), and either runs one
     turn (if the block has a "prompt" key) or an interactive REPL until Ctrl-D / an empty line."""
     j = job.load(job_path)
-    cfg = job.resolve_chat(j)
+    cfg = job.resolve_chat(j, job_dir=os.path.dirname(os.path.abspath(job_path)))
     job.check_known_keys(cfg, ACCEPTED_KEYS | COMMON_KEYS, where="\"chat\"")
     assert "model_tag" in cfg, "chat: \"chat\": {\"model_tag\": ...} is required in the job file"
 
-    ctx = Context(device_type=cfg.get("device", "auto"))
-    source = cfg.get("source", "sft")
-    model, tokenizer, meta = checkpoints.load_model(source, ctx.device, phase="eval", model_tag=cfg["model_tag"], step=cfg.get("model_step"))
+    ctx = Context(device_type=cfg.get("device", "auto"), tokenizer_spec=cfg.get("tokenizer"))
+    model, tokenizer, meta = checkpoints.load_model(cfg["model_tag"], ctx.device, phase="eval", step=cfg.get("model_step"),
+                                                    tokenizer_spec=ctx.tokenizer_spec)
     model.eval()
     engine = Engine(model, tokenizer, manager=ctx.model_manager)
 
@@ -70,7 +72,7 @@ def main(job_path: str):
             conversation_tokens.append(assistant_end)
         return conversation_tokens
 
-    print0(f"Loaded {source}:{cfg['model_tag']} (step {meta.get('step')}). Ctrl-D or an empty line to exit.")
+    print0(f"Loaded {cfg['model_tag']} (step {meta.get('step')}). Ctrl-D or an empty line to exit.")
     try:
         conversation_tokens = [bos]
         if "prompt" in cfg:

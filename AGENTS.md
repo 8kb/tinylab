@@ -13,7 +13,10 @@ reading this on GitHub — the modelcore/datacore/benchcore links are real GitHu
 anywhere.)
 
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
-`[tool.uv.sources]`: `modelcore` `v0.3.0`, `datacore` `v0.2.1`, `benchcore` `v0.1.1`.
+`[tool.uv.sources]`: `modelcore` `v0.4.0`, `datacore` `v0.3.0`, `benchcore` `v0.2.1`. **The code in this
+tree needs `modelcore` `v0.5.0`** (`modelcore.v2` configs: `template`, `tokenizer`, comments, nested
+`mlp`) — bump the pin (and relock) once that tag exists; until then only a local editable install of
+`../modelcore` runs it.
 
 ## Invariants owned elsewhere
 
@@ -99,11 +102,26 @@ anywhere.)
   first step from being the one that first triggers a cold compiled-kernel cache on whatever
   backend it's running on. `modelcore.optim.MuonAdamW.step` is compiled regardless, internally —
   tinylab's own loop doesn't control or opt out of that. See `docs/architecture.md`.
-- **A `tokenizer` step (if a job file uses one) must be its first step.** `Context.tokenizer` is a
-  lazily-built, memoized property — the first op in a run to touch it wins, and every op after that
-  gets the same cached instance. A `tokenizer` step running after `prepare`/`train`/`bench` already
-  accessed `ctx.tokenizer` would train and save a new vocab to disk that this same run never
-  actually uses. Most job files never need this op at all — tinylab ships a committed default vocab.
+- **A `tokenizer` step (if a job file uses one) must come before any step that loads *that same*
+  tokenizer.** `Context.tokenizer_for` is a lazily-built cache keyed by resolved directory — the
+  first op in a run to touch a given tokenizer wins, and every op after that
+  gets the same cached instance. A `tokenizer` step writing a tokenizer an earlier step already
+  loaded would train and save a new vocab to disk that this same run never actually uses, so it
+  raises. (Training a *different* name is fine.) Most job files never need this op at all — tinylab
+  ships a committed default vocab.
+- **Only the `default` tokenizer is ever created for you.** A missing named one raises rather than
+  copying the bundled vocab under that name — the copy would be fingerprint-identical, so no
+  downstream identity check could catch the user getting the wrong tokenizer. A run has one
+  tokenizer (`"tokenizer"`, read off the first step like `"device"`); a checkpoint records its own
+  (`model_config["tokenizer"]`) and `bench`/`chat` fall back to that when the job names none.
+- **Checkpoint tags are arbitrary text with `/` folders, and share one namespace.** There is no
+  `source` key and no `base_`/`chatsft_` directory: `output_tag`/`source_tag`/`model_tag` are each a
+  complete address under `<base_dir>/checkpoints/`. Consequence: a base and an sft checkpoint can no
+  longer share a tag (nanochat's `d12`-for-both convention), so an sft step with `output_tag ==
+  source_tag` is refused. Don't reintroduce a per-kind directory to get that back — put the kind in
+  the tag (`gpt-d12-base` / `gpt-d12-chat`).
+- **A `kind: sft` checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
+  Declarative only until modelcore validates templates against the tokenizer's special tokens.
 - **`train` only ever warm-starts an optimizer from its *own* prior checkpoint (`--resume`), never
   from a different one.** An `sft` step always builds a fresh optimizer for its `source_tag`
   base's weights (`ModelManager.create_optimizer`), unlike nanochat's `chat_sft.py

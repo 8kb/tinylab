@@ -1,9 +1,11 @@
 {
-  "format": "modelcore.v1",
+  "format": "modelcore.v2",
+  "_comment": "Dumped once via nanochat's scripts/model_info.py --arch gpt --depth 12 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 2048,
   "vocab_size": 32768,
   "n_embd": 768,
   "pad_vocab_size_to": 64,
+  "template": "base",
   "reference": {
     "preset": "gpt",
     "kwargs": {
@@ -17,7 +19,12 @@
   "shared": {
     "rope": {
       "#type": "rotary",
-      "head_dim": 128
+      "head_dim": 128,
+      "over_compute": 10
+    },
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
     }
   },
   "input": {
@@ -37,7 +44,12 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.15,
-        "x0_lambda_init": 0.2
+        "x0_lambda_init": 0.2,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -47,7 +59,12 @@
         "window": 512,
         "has_value_embed": true,
         "resid_lambda_init": 1.1409090909090909,
-        "x0_lambda_init": 0.18636363636363637
+        "x0_lambda_init": 0.18636363636363637,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -57,17 +74,27 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.1318181818181818,
-        "x0_lambda_init": 0.17272727272727273
+        "x0_lambda_init": 0.17272727272727273,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
         "layer_idx": 3,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "has_value_embed": true,
         "resid_lambda_init": 1.1227272727272726,
-        "x0_lambda_init": 0.15909090909090912
+        "x0_lambda_init": 0.15909090909090912,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -77,7 +104,12 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.1136363636363635,
-        "x0_lambda_init": 0.14545454545454548
+        "x0_lambda_init": 0.14545454545454548,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -87,7 +119,12 @@
         "window": 512,
         "has_value_embed": true,
         "resid_lambda_init": 1.1045454545454545,
-        "x0_lambda_init": 0.13181818181818183
+        "x0_lambda_init": 0.13181818181818183,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -97,17 +134,27 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.0954545454545455,
-        "x0_lambda_init": 0.11818181818181821
+        "x0_lambda_init": 0.11818181818181821,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
         "layer_idx": 7,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "has_value_embed": true,
         "resid_lambda_init": 1.0863636363636362,
-        "x0_lambda_init": 0.10454545454545455
+        "x0_lambda_init": 0.10454545454545455,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -117,7 +164,12 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.0772727272727272,
-        "x0_lambda_init": 0.09090909090909093
+        "x0_lambda_init": 0.09090909090909093,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -127,7 +179,12 @@
         "window": 512,
         "has_value_embed": true,
         "resid_lambda_init": 1.0681818181818181,
-        "x0_lambda_init": 0.0772727272727273
+        "x0_lambda_init": 0.0772727272727273,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
@@ -137,17 +194,27 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.059090909090909,
-        "x0_lambda_init": 0.06363636363636366
+        "x0_lambda_init": 0.06363636363636366,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       },
       {
         "#type": "gpt_block",
         "layer_idx": 11,
         "n_head": 6,
         "n_kv_head": 6,
-        "window": 2048,
+        "window": -1,
         "has_value_embed": true,
         "resid_lambda_init": 1.0499999999999998,
-        "x0_lambda_init": 0.05000000000000002
+        "x0_lambda_init": 0.05000000000000002,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 3072
+        }
       }
     ]
   },

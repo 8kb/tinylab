@@ -20,7 +20,7 @@ ctx.resume_checkpoint_step (the job state file's own record of the last checkpoi
 (checkpoints.find_last_step) only when it isn't (e.g. this op called directly, without going
 through job.run_file). See "Resume" in the run() docstring below.
 """
-import os
+import dataclasses
 import time
 
 from datacore import DatasetMismatch, FileSystemDatasetStore
@@ -45,7 +45,7 @@ _COMMON_KEYS = {
     "adapter_lr", "adapter_scalar_lr",
 }
 _BASE_KEYS = set()
-_SFT_KEYS = {"source", "source_tag", "source_step"}
+_SFT_KEYS = {"source_tag", "source_step"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -159,6 +159,17 @@ def run(cfg: dict, ctx) -> dict:
         "if the launch's GPU configuration changes."
     )
 
+    output_tag = cfg.get("output_tag", cfg["name"])
+    # One checkpoint namespace means a base and an sft checkpoint can no longer share a tag by
+    # living in different directories -- so an sft step must not write where it reads from, or its
+    # source weights would be mixed with (and, resuming, mistaken for) its own output.
+    assert kind != "sft" or cfg.get("source_tag") != output_tag, (
+        f"train: sft step {cfg['name']!r} has output_tag == source_tag == {output_tag!r} -- it would "
+        f"read its starting weights from, and write its result into, the same checkpoint directory. "
+        f"Give it a distinct \"output_tag\" (checkpoint tags share one namespace; the tag is where "
+        f"you say what kind of checkpoint it is, e.g. \"gpt-d12-base\" / \"gpt-d12-chat\")."
+    )
+
     manager = ctx.model_manager
     tokenizer = ctx.tokenizer
     vocab_size = tokenizer.get_vocab_size()
@@ -179,8 +190,7 @@ def run(cfg: dict, ctx) -> dict:
     device_batch_size = cfg.get("device_batch_size", 4)
     total_batch_size = cfg["total_batch_size"]
 
-    output_tag = cfg.get("output_tag", cfg["name"])
-    checkpoint_dir = os.path.join(checkpoints.get_base_dir(), checkpoints.CHECKPOINT_DIRS[kind], output_tag)
+    checkpoint_dir = checkpoints.resolve_checkpoint_dir(output_tag)
 
     # -- resume: does this step already have a checkpoint of its own to continue from? --
     resumed_step = None
@@ -245,7 +255,6 @@ def run(cfg: dict, ctx) -> dict:
             model = manager.create_model(real_config, device=device, seed=42)
         else:
             assert "source_tag" in cfg, "train: kind='sft' requires 'source_tag' (the tag of a prior 'base' train step)"
-            source = cfg.get("source", "base")
             # An sft step's "model_config", if given, is a config-override request (e.g. to attach
             # LoRA/DoRA adapters to an already-trained base) -- not a from-scratch build like
             # kind=base uses. Omitting it (the common case) loads the checkpoint's own stored
@@ -254,8 +263,8 @@ def run(cfg: dict, ctx) -> dict:
             if "model_config" in cfg:
                 config_override = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
             model, _source_tokenizer, meta = checkpoints.load_model(
-                source, device, phase="train", model_tag=cfg["source_tag"], step=cfg.get("source_step"),
-                config_override=config_override,
+                cfg["source_tag"], device, phase="train", step=cfg.get("source_step"),
+                config_override=config_override, tokenizer_spec=ctx.tokenizer_spec,
             )
             real_config = model.config
             num_iterations = cfg.get("num_iterations")
@@ -313,9 +322,15 @@ def run(cfg: dict, ctx) -> dict:
     )
 
     def _save(step, val_bpb, dataloader_state, elapsed):
+        # The saved config says which tokenizer it needs (see checkpoints.build_model), and an sft
+        # step declares the chat format it trained in -- a base checkpoint keeps whatever template
+        # its own model_config named.
+        saved_config = dataclasses.replace(real_config, tokenizer=tokenizer.descriptor(ctx.tokenizer_name))
+        if kind == "sft":
+            saved_config = dataclasses.replace(saved_config, template="nanochat")
         meta_data = {
             "step": step, "val_bpb": val_bpb, "tokenizer_fingerprint": tokenizer_fingerprint,
-            "model_config": manager.config_to_dict(real_config),
+            "model_config": manager.config_to_dict(saved_config),
             # cfg's own "model_config" is excluded from user_config: it's the *request* (a path,
             # already resolved into the "model_config" key above -- a different dict, same name by
             # coincidence), and would otherwise duplicate that key's content under a different,

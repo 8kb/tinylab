@@ -5,7 +5,7 @@ a function, not a static set, so an op like `prepare`/`train` can accept a diffe
 depending on the step's own "kind") and `run(cfg: dict, ctx: Context) -> dict`.
 
 Context carries base dir, device, and rank/world_size, plus lazily-built ModelManager/DataManager/
-BenchManager/tokenizer singletons, plus the resume hooks tinylab.job.run_file wires up (see
+BenchManager singletons and a per-directory cache of loaded tokenizers, plus the resume hooks tinylab.job.run_file wires up (see
 Context.resume_checkpoint_step/record_checkpoint) -- explicitly passed to every op, never a module
 global, matching the subsystems' own no-ambient-globals rule (see
 llmllab/docs/subsystem-conventions.md).
@@ -17,11 +17,14 @@ from dataclasses import dataclass, field
 class Context:
     device_type: str = "auto"
     resume: bool = False
+    # The run's tokenizer, as a job's "tokenizer" value: None (the default one), a bare name, or a
+    # path -- see tinylab.tokenizer.resolve_tokenizer_dir. One per run, like device_type.
+    tokenizer_spec: str | None = None
     _device_info: tuple | None = field(default=None, repr=False, compare=False)
     _model_manager: object | None = field(default=None, repr=False, compare=False)
     _data_manager: object | None = field(default=None, repr=False, compare=False)
     _bench_manager: object | None = field(default=None, repr=False, compare=False)
-    _tokenizer: object | None = field(default=None, repr=False, compare=False)
+    _tokenizers: dict = field(default_factory=dict, repr=False, compare=False)  # resolved dir -> loaded tokenizer
     # Resume plumbing, wired up by tinylab.job.run_file (and only there) -- see its own docstring.
     # Both default to "nothing to hook into", so ops.train.run() stays fully usable standalone
     # (tests construct a bare Context with neither) and just falls back to scanning its checkpoint
@@ -87,10 +90,30 @@ class Context:
 
     @property
     def tokenizer(self):
-        if self._tokenizer is None:
-            from tinylab.tokenizer import get_tokenizer
-            self._tokenizer = get_tokenizer()
-        return self._tokenizer
+        """The run's tokenizer (tokenizer_spec), loaded once and memoized."""
+        return self.tokenizer_for(self.tokenizer_spec)
+
+    @property
+    def tokenizer_name(self):
+        """What a checkpoint's `tokenizer` block records as this run's selection."""
+        from tinylab.tokenizer import DEFAULT_TOKENIZER_NAME
+        return self.tokenizer_spec or DEFAULT_TOKENIZER_NAME
+
+    def tokenizer_for(self, spec):
+        """Any named tokenizer, memoized per resolved directory -- two specs naming the same
+        directory share one loaded instance."""
+        from tinylab.tokenizer import get_tokenizer, resolve_tokenizer_dir
+        key = resolve_tokenizer_dir(spec)
+        if key not in self._tokenizers:
+            self._tokenizers[key] = get_tokenizer(tokenizer=spec)
+        return self._tokenizers[key]
+
+    def is_tokenizer_loaded(self, spec):
+        """True if a step in this run has already loaded the tokenizer `spec` names. The
+        "tokenizer" op refuses to overwrite one: this run would keep using the stale in-memory copy
+        while the new vocab on disk went unused."""
+        from tinylab.tokenizer import resolve_tokenizer_dir
+        return resolve_tokenizer_dir(spec) in self._tokenizers
 
 
 # Keys every op accepts even if it doesn't read all of them, because they're meant to live in a
@@ -99,8 +122,9 @@ class Context:
 # materialized ModelConfig tree -- irrelevant to prepare/bench, which is fine, they just ignore
 # it), "world_size" (the GPU count a train step's total_batch_size/grad_accum math assumes --
 # checked against the actual launch, not read by prepare/bench, but a defaults-block value shared
-# by every step in a run either way).
-COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size"}
+# by every step in a run either way), and "tokenizer" (which named tokenizer the run uses -- one per
+# run, like "device": read off the first step, so put it in "defaults").
+COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer"}
 
 
 from tinylab.ops import prepare, train, bench, tokenizer  # noqa: E402 -- after Context, to avoid a cycle

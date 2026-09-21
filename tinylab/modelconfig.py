@@ -21,12 +21,12 @@ def load_model_config(path: str, *, sequence_len: int, vocab_size: int) -> Model
     with open(path, "r", encoding="utf-8") as f:
         config = ModelConfig.from_dict(json.load(f))
     assert config.sequence_len == sequence_len, (
-        f'"model.config" {path!r} was dumped at sequence_len={config.sequence_len}, but this '
+        f'"model_config" {path!r} was dumped at sequence_len={config.sequence_len}, but this '
         f'step\'s own "sequence_len" is {sequence_len} -- re-dump the config at the right length '
         f'(nanochat: scripts/model_info.py --max-seq-len={sequence_len} --dump-config).'
     )
     assert config.vocab_size == vocab_size, (
-        f'"model.config" {path!r} was dumped at vocab_size={config.vocab_size}, but the local '
+        f'"model_config" {path!r} was dumped at vocab_size={config.vocab_size}, but the local '
         f'tokenizer\'s vocab size is {vocab_size} -- both must come from the same tokenizer.'
     )
     return config

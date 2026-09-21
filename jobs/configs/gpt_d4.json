@@ -1,9 +1,11 @@
 {
-  "format": "modelcore.v1",
+  "format": "modelcore.v2",
+  "_comment": "Dumped once via nanochat's scripts/model_info.py --arch gpt --depth 4 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 2048,
   "vocab_size": 32768,
   "n_embd": 256,
   "pad_vocab_size_to": 64,
+  "template": "base",
   "reference": {
     "preset": "gpt",
     "kwargs": {
@@ -17,7 +19,12 @@
   "shared": {
     "rope": {
       "#type": "rotary",
-      "head_dim": 128
+      "head_dim": 128,
+      "over_compute": 10
+    },
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
     }
   },
   "input": {
@@ -37,7 +44,12 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.15,
-        "x0_lambda_init": 0.2
+        "x0_lambda_init": 0.2,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 1024
+        }
       },
       {
         "#type": "gpt_block",
@@ -47,7 +59,12 @@
         "window": 512,
         "has_value_embed": true,
         "resid_lambda_init": 1.1166666666666665,
-        "x0_lambda_init": 0.15000000000000002
+        "x0_lambda_init": 0.15000000000000002,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 1024
+        }
       },
       {
         "#type": "gpt_block",
@@ -57,17 +74,27 @@
         "window": 512,
         "has_value_embed": false,
         "resid_lambda_init": 1.0833333333333333,
-        "x0_lambda_init": 0.10000000000000002
+        "x0_lambda_init": 0.10000000000000002,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 1024
+        }
       },
       {
         "#type": "gpt_block",
         "layer_idx": 3,
         "n_head": 2,
         "n_kv_head": 2,
-        "window": 2048,
+        "window": -1,
         "has_value_embed": true,
         "resid_lambda_init": 1.0499999999999998,
-        "x0_lambda_init": 0.05000000000000002
+        "x0_lambda_init": 0.05000000000000002,
+        "mlp": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 1024
+        }
       }
     ]
   },
