@@ -62,19 +62,19 @@ def _one_epoch(dataset, sequence_len, total_batch_size):
     return max(1, dataset.num_sequences("train") * sequence_len // total_batch_size)
 
 
-def _open_dataset(cfg, ctx, kind, sequence_len):
+def _open_dataset(cfg, ctx, kind, sequence_len, tokenizer):
     """Opens the dataset this step trains on, raising a clear error (not letting datacore's own
     FileNotFoundError propagate unexplained) if it hasn't been prepared yet, or was prepared with a
     different sequence_len or tokenizer than this step is using. Returns (dataset_name, dataset,
     token_bytes) -- token_bytes is the per-token-id byte-length table evaluate_bpb needs."""
-    dataset_name = cfg.get("dataset") or prepare.default_dataset_name(kind, sequence_len, ctx.tokenizer)
+    dataset_name = cfg.get("dataset") or prepare.default_dataset_name(kind, sequence_len, tokenizer)
     dataset_dir = prepare.prepared_dir(dataset_name)
     store = FileSystemDatasetStore(dataset_dir)
     try:
         # expect_sequence_len/expect_fingerprint: datacore's own (opt-in) comparison now, not a
         # hand-written check -- see datacore/AGENTS.md's "tokenizer fingerprint" invariant for why
         # datacore itself still never decides *to* compare.
-        dataset = ctx.data_manager.open(store, expect_sequence_len=sequence_len, expect_fingerprint=ctx.tokenizer.fingerprint())
+        dataset = ctx.data_manager.open(store, expect_sequence_len=sequence_len, expect_fingerprint=tokenizer.fingerprint())
     except FileNotFoundError:
         raise SystemExit(
             f"No prepared dataset found at {dataset_dir}. Run a \"prepare\" step first, with "
@@ -171,7 +171,11 @@ def run(cfg: dict, ctx) -> dict:
     )
 
     manager = ctx.model_manager
-    tokenizer = ctx.tokenizer
+    # This step's own tokenizer (see Context.tokenizer_for): cfg["tokenizer"] if this step sets
+    # one, else the run's default -- e.g. training two differently-vocabbed models sets it per
+    # train step, not once in "defaults".
+    tokenizer_spec = cfg.get("tokenizer")
+    tokenizer = ctx.tokenizer_for(tokenizer_spec)
     vocab_size = tokenizer.get_vocab_size()
     device = ctx.device
     ddp, ddp_rank, ddp_local_rank, ddp_world_size = ctx.device_info[:4]
@@ -183,7 +187,7 @@ def run(cfg: dict, ctx) -> dict:
     tokenizer_fingerprint = tokenizer.fingerprint()
     print0(f"[{cfg['name']}] compute dtype: {COMPUTE_DTYPE} ({COMPUTE_DTYPE_REASON})")
 
-    dataset_name, dataset, token_bytes = _open_dataset(cfg, ctx, kind, sequence_len)
+    dataset_name, dataset, token_bytes = _open_dataset(cfg, ctx, kind, sequence_len, tokenizer)
     print0(f"Dataset: {dataset_name} ({dataset.num_sequences('train'):,} train / {dataset.num_sequences('val'):,} val sequences)")
 
     weight_decay = cfg.get("weight_decay", 0.28 if kind == "base" else 0.0)
@@ -264,7 +268,7 @@ def run(cfg: dict, ctx) -> dict:
                 config_override = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
             model, _source_tokenizer, meta = checkpoints.load_model(
                 cfg["source_tag"], device, phase="train", step=cfg.get("source_step"),
-                config_override=config_override, tokenizer_spec=ctx.tokenizer_spec,
+                config_override=config_override, tokenizer_spec=tokenizer_spec,
             )
             real_config = model.config
             num_iterations = cfg.get("num_iterations")
@@ -325,7 +329,7 @@ def run(cfg: dict, ctx) -> dict:
         # The saved config says which tokenizer it needs (see checkpoints.build_model), and an sft
         # step declares the chat format it trained in -- a base checkpoint keeps whatever template
         # its own model_config named.
-        saved_config = dataclasses.replace(real_config, tokenizer=tokenizer.descriptor(ctx.tokenizer_name))
+        saved_config = dataclasses.replace(real_config, tokenizer=tokenizer.descriptor(ctx.tokenizer_name_for(tokenizer_spec)))
         if kind == "sft":
             saved_config = dataclasses.replace(saved_config, template="nanochat")
         meta_data = {

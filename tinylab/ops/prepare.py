@@ -15,7 +15,8 @@ from tinylab.tokenizer import DEFAULT_MAX_TOKENS_PER_CONVERSATION
 
 # Keys shared by both kinds, plus each kind's own -- see accepted_keys() below, which is kind-
 # aware so e.g. "mmlu_epochs" on a kind="base" step is caught as an error rather than silently
-# accepted and ignored.
+# accepted and ignored. "tokenizer" is already in ops.COMMON_KEYS (every op accepts it -- it's the
+# step's own tokenizer selection, see Context.tokenizer_for), so it isn't repeated here.
 _COMMON_KEYS = {"kind", "dataset", "sequences_per_volume", "buffer_size", "tokenizer_threads"}
 _BASE_KEYS = {"shards"}
 _SFT_KEYS = {"max_conversations", "mmlu_epochs", "gsm8k_epochs", "max_tokens_per_conversation", "sft_padding_id"}
@@ -36,13 +37,13 @@ def default_dataset_name(kind: str, sequence_len: int, tokenizer) -> str:
     return f"{stem}_t{sequence_len}_{tokenizer.fingerprint()}"
 
 
-def _prepare_base(cfg, ctx, sequence_len):
+def _prepare_base(cfg, ctx, sequence_len, tokenizer):
     """kind="base": ensures cfg["shards"] ClimbMix train shards (plus the fixed val shard) are on
     disk, downloading whatever's missing, then packs exactly those paths -- never however many
     shard files a larger previous run happened to leave around. Returns (dataset_name, dataset_dir,
     manifest)."""
     manager = ctx.data_manager
-    dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, ctx.tokenizer)
+    dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, tokenizer)
     dataset_dir = prepared_dir(dataset_name)
     store = FileSystemDatasetStore(dataset_dir)
 
@@ -58,7 +59,7 @@ def _prepare_base(cfg, ctx, sequence_len):
     packer = BestFitCropPacker(buffer_size=cfg.get("buffer_size", 1000))
     t0 = time.time()
     manifest = manager.prepare(
-        store, sources=sources, tokenizer=ctx.tokenizer, sequence_len=sequence_len,
+        store, sources=sources, tokenizer=tokenizer, sequence_len=sequence_len,
         sequences_per_volume=cfg.get("sequences_per_volume", 16384), packer=packer,
         num_threads=cfg.get("tokenizer_threads", os.cpu_count()),
     )
@@ -93,12 +94,12 @@ def _build_sft_mixtures(cfg, ctx):
     return train_mixture, val_mixture
 
 
-def _prepare_sft(cfg, ctx, sequence_len):
+def _prepare_sft(cfg, ctx, sequence_len, tokenizer):
     """kind="sft": builds the conversation mixture (see _build_sft_mixtures), renders each
     conversation to (ids, loss mask) via the tokenizer, and packs the result with BestFitPadPacker.
     Returns (dataset_name, dataset_dir, manifest)."""
     manager = ctx.data_manager
-    dataset_name = cfg.get("dataset") or default_dataset_name("sft", sequence_len, ctx.tokenizer)
+    dataset_name = cfg.get("dataset") or default_dataset_name("sft", sequence_len, tokenizer)
     dataset_dir = prepared_dir(dataset_name)
     store = FileSystemDatasetStore(dataset_dir)
 
@@ -106,8 +107,8 @@ def _prepare_sft(cfg, ctx, sequence_len):
     print0(f"Preparing SFT dataset {dataset_name!r}: {len(train_mixture):,} train conversations, {len(val_mixture):,} val -> {dataset_dir}")
 
     max_tokens = cfg.get("max_tokens_per_conversation", DEFAULT_MAX_TOKENS_PER_CONVERSATION)
-    bos_id = ctx.tokenizer.get_bos_token_id()
-    render = lambda conversation: ctx.tokenizer.render_conversation(conversation, max_tokens=max_tokens)
+    bos_id = tokenizer.get_bos_token_id()
+    render = lambda conversation: tokenizer.render_conversation(conversation, max_tokens=max_tokens)
     sources = {
         "train": ExampleTokenSource(train_mixture, render, "train"),
         "val": ExampleTokenSource(val_mixture, render, "val"),
@@ -115,7 +116,7 @@ def _prepare_sft(cfg, ctx, sequence_len):
     packer = BestFitPadPacker(bos_token_id=bos_id, padding_id=cfg.get("sft_padding_id"), buffer_size=cfg.get("buffer_size", 1000))
     t0 = time.time()
     manifest = manager.prepare(
-        store, sources=sources, tokenizer=ctx.tokenizer, sequence_len=sequence_len,
+        store, sources=sources, tokenizer=tokenizer, sequence_len=sequence_len,
         sequences_per_volume=cfg.get("sequences_per_volume", 16384), packer=packer,
         num_threads=cfg.get("tokenizer_threads", os.cpu_count()),
     )
@@ -132,10 +133,14 @@ def run(cfg: dict, ctx) -> dict:
     assert kind in ("base", "sft"), f"prepare: kind must be 'base' or 'sft', got {kind!r}"
     assert "sequence_len" in cfg, "prepare: 'sequence_len' is required (put it in \"defaults\" to share it with a matching train step)"
     sequence_len = cfg["sequence_len"]
+    # This step's own tokenizer (see Context.tokenizer_for): cfg["tokenizer"] if this step sets
+    # one, else the run's default -- a multi-tokenizer job (e.g. preparing base/sft data for two
+    # differently-sized vocabularies) sets it per prepare step, not once in "defaults".
+    tokenizer = ctx.tokenizer_for(cfg.get("tokenizer"))
     if kind == "base":
-        dataset_name, dataset_dir, manifest = _prepare_base(cfg, ctx, sequence_len)
+        dataset_name, dataset_dir, manifest = _prepare_base(cfg, ctx, sequence_len, tokenizer)
     else:
-        dataset_name, dataset_dir, manifest = _prepare_sft(cfg, ctx, sequence_len)
+        dataset_name, dataset_dir, manifest = _prepare_sft(cfg, ctx, sequence_len, tokenizer)
     return {
         "op": "prepare", "kind": kind, "dataset": dataset_name, "dataset_dir": dataset_dir,
         "splits": {split: {"num_sequences": s["num_sequences"], "num_tokens": s["num_tokens"]}

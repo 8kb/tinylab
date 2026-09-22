@@ -90,23 +90,37 @@ class Context:
 
     @property
     def tokenizer(self):
-        """The run's tokenizer (tokenizer_spec), loaded once and memoized."""
+        """The run's default tokenizer (tokenizer_spec, read off the first resolved step -- see
+        tinylab.job.run_file), loaded once and memoized. Any individual step that sets its own
+        "tokenizer" key uses tokenizer_for(that spec) instead -- see COMMON_KEYS below; this
+        property is the fallback a step without one gets."""
         return self.tokenizer_for(self.tokenizer_spec)
 
     @property
     def tokenizer_name(self):
-        """What a checkpoint's `tokenizer` block records as this run's selection."""
-        from tinylab.tokenizer import DEFAULT_TOKENIZER_NAME
-        return self.tokenizer_spec or DEFAULT_TOKENIZER_NAME
+        """What a checkpoint's `tokenizer` block records, for a step using the run's default
+        tokenizer. A step with its own "tokenizer" key uses tokenizer_name_for(that spec)
+        instead."""
+        return self.tokenizer_name_for(self.tokenizer_spec)
 
     def tokenizer_for(self, spec):
         """Any named tokenizer, memoized per resolved directory -- two specs naming the same
-        directory share one loaded instance."""
+        directory share one loaded instance. A job that trains two differently-vocabbed models
+        calls this once per distinct spec (a "tokenizer" step, a "prepare" step, a "train" step,
+        each setting their own "tokenizer" key -- see docs/job-file.md), not once for the whole
+        run."""
         from tinylab.tokenizer import get_tokenizer, resolve_tokenizer_dir
         key = resolve_tokenizer_dir(spec)
         if key not in self._tokenizers:
             self._tokenizers[key] = get_tokenizer(tokenizer=spec)
         return self._tokenizers[key]
+
+    def tokenizer_name_for(self, spec):
+        """What a checkpoint's `tokenizer` block records for a step using tokenizer_for(spec) --
+        the name/path a train step's own "tokenizer" key names, so a checkpoint written under a
+        non-default tokenizer records *that* tokenizer's name, not the run's default one."""
+        from tinylab.tokenizer import DEFAULT_TOKENIZER_NAME
+        return spec or DEFAULT_TOKENIZER_NAME
 
     def is_tokenizer_loaded(self, spec):
         """True if a step in this run has already loaded the tokenizer `spec` names. The
@@ -120,10 +134,16 @@ class Context:
 # job file's shared "defaults" block: "device" (compute_init's device_type), "sequence_len" (must
 # agree between a prepared dataset and the model that trains on it), "model_config" (a path to a
 # materialized ModelConfig tree -- irrelevant to prepare/bench, which is fine, they just ignore
-# it), "world_size" (the GPU count a train step's total_batch_size/grad_accum math assumes --
+# it), and "world_size" (the GPU count a train step's total_batch_size/grad_accum math assumes --
 # checked against the actual launch, not read by prepare/bench, but a defaults-block value shared
-# by every step in a run either way), and "tokenizer" (which named tokenizer the run uses -- one per
-# run, like "device": read off the first step, so put it in "defaults").
+# by every step in a run either way).
+#
+# "tokenizer" is different from the other four: it's still read off the first resolved step as the
+# *run's default* (job.run_file's Context(tokenizer_spec=...), used by ctx.tokenizer/tokenizer_name
+# and by "chat"), but unlike "device" it is NOT one-per-run -- prepare/train/bench each resolve
+# their OWN step's "tokenizer" key via ctx.tokenizer_for(cfg.get("tokenizer")), falling back to the
+# run default only when a step doesn't set one. A job training two differently-vocabbed models sets
+# "tokenizer" per relevant step rather than in "defaults" -- see docs/job-file.md.
 COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer"}
 
 
