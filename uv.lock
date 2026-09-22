@@ -45,8 +45,8 @@ wheels = [
 
 [[package]]
 name = "benchcore"
-version = "0.2.1"
-source = { git = "https://github.com/8kb/benchcore?tag=v0.2.1#f777d1c7a7dee9606b4fda96ecf1f57f0920a558" }
+version = "0.3.0"
+source = { git = "https://github.com/8kb/benchcore?tag=v0.3.0#f39396842bcd0fd0b70ebe7cec77af45081aa919" }
 dependencies = [
     { name = "datacore", extra = ["parquet"] },
     { name = "filelock" },
@@ -810,8 +810,8 @@ wheels = [
 
 [[package]]
 name = "modelcore"
-version = "0.5.0"
-source = { git = "https://github.com/8kb/modelcore?tag=v0.5.0#564e0a1d0b83d7dfe111da2d79bd8406c70ba914" }
+version = "0.7.0"
+source = { git = "https://github.com/8kb/modelcore?tag=v0.7.0#8d9cf9900c6a3797152deca8d9198b43179ad6cc" }
 dependencies = [
     { name = "torch", version = "2.9.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu') or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu') or (extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu')" },
@@ -2024,9 +2024,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.2.1" },
+    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.3.0" },
     { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.3.0" },
-    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.5.0" },
+    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.7.0" },
     { name = "rustbpe", specifier = ">=0.1.0" },
     { name = "setuptools", marker = "extra == 'cpu'", specifier = ">=65.0.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },

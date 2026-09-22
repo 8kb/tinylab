@@ -1,6 +1,6 @@
 [project]
 name = "tinylab"
-version = "0.2.0"
+version = "0.3.0"
 description = "The second host application in the llmllab family: prepare data, train, chat, bench -- all tasks from one JSON job file."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,9 +46,9 @@ torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "gpu" },
 ]
-modelcore = { git = "https://github.com/8kb/modelcore", tag = "v0.5.0" }
+modelcore = { git = "https://github.com/8kb/modelcore", tag = "v0.7.0" }
 datacore = { git = "https://github.com/8kb/datacore", tag = "v0.3.0" }
-benchcore = { git = "https://github.com/8kb/benchcore", tag = "v0.2.1" }
+benchcore = { git = "https://github.com/8kb/benchcore", tag = "v0.3.0" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
