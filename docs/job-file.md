@@ -32,7 +32,7 @@ fresh start or a continuation is a fact about the invocation, not the pipeline. 
 | `sequence_len` | Context length. Shared between `prepare` and `train`: a dataset is packed to a fixed `sequence_len`, and a `train` step raises if its own `sequence_len` doesn't match. Required by `prepare`/`train`; irrelevant to `bench`. | — |
 | `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers, `"format": "modelcore.v2"`) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. A `modelcore.v1` file still loads (modelcore upgrades it). Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
 | `world_size` | The GPU count a `train` step's `total_batch_size`/grad-accum arithmetic assumes — checked against the actual launch (e.g. `torchrun --nproc_per_node`) and a hard error on mismatch, since the job file fixes GPU count rather than tinylab inferring it. Irrelevant to `prepare`/`bench`. Required by `train`. | — |
-| `tokenizer` | Which tokenizer the run uses: a **bare name** (`"bpe32k"` → `<base_dir>/tokenizers/bpe32k/`) or, if the value contains a path separator, a **path** (`"./toks/mine"`; relative paths resolve against the job file's own directory, like `model_config`). One value for a whole run — read off the first resolved step, so put it in `defaults`. The default one is tinylab's bundled vocab, copied to `<base_dir>/tokenizers/default/` on first use; any other name must already exist (train it with a `tokenizer` step). A checkpoint records which tokenizer it was trained with, so `bench`/`chat` pick it up on their own when this is unset, and refuse to load it with one whose fingerprint differs. | `"default"` |
+| `tokenizer` | Which tokenizer this step uses: a **bare name** (`"bpe32k"` → `<base_dir>/tokenizers/bpe32k/`) or, if the value contains a path separator, a **path** (`"./toks/mine"`; relative paths resolve against the job file's own directory, like `model_config`). Read **per step**, not once for the whole run: a step without its own `"tokenizer"` falls back to the run's default (read off the first resolved step, same as `device` — put it in `defaults` for the common case of one tokenizer per run). A job training several differently-vocabbed models sets `"tokenizer"` on each `prepare`/`train`/`bench` step that needs a non-default one instead — see "Training two differently-vocabbed models" below. The default one is tinylab's bundled vocab, copied to `<base_dir>/tokenizers/default/` on first use; any other name must already exist (train it with a `tokenizer` step first). `bench`/`chat` pick up the checkpoint's own recorded tokenizer on their own when this is unset, and refuse to load it with one whose fingerprint differs. | run's default, else `"default"` |
 
 ## `prepare`
 
@@ -123,8 +123,8 @@ default below matches nanochat's own `scripts/tok_train.py`.
 
 Scores a checkpoint. `"suite": "core"` runs DCLM's CORE benchmark; `"suite": "chat"` runs the ARC/
 MMLU/GSM8K/HumanEval chat-task suite plus the combined ChatCORE metric. Required: `suite`,
-`model_tag`. The checkpoint's tokenizer is the run's `tokenizer` if set, else the one the checkpoint
-itself records.
+`model_tag`. The checkpoint's tokenizer is this step's own `tokenizer` if set, else the one the
+checkpoint itself records.
 
 | Key | Meaning | Default | Which `suite` |
 |---|---|---|---|
@@ -133,12 +133,14 @@ itself records.
 | `model_step` | A specific step of that checkpoint, instead of its latest. | latest | both |
 | `max_per_task` | Caps examples per CORE task. Must leave enough for that task's own few-shot count, or benchcore's few-shot sampling raises — see `docs/architecture.md`. | unset (every example) | core |
 | `tasks` | Which chat tasks to run. | all of `ARC-Easy`, `ARC-Challenge`, `MMLU`, `GSM8K`, `HumanEval` | chat |
-| `batch_size` | Generation batch size. | `1` | chat |
+| `batch_size` | Categorical (ARC/MMLU) loop's problems-per-forward. Never reaches the generative loop. | `1` | chat |
+| `generative_batch_size` | Generative (GSM8K/HumanEval) loop's problems-per-decode-batch. `1` is the one-problem-at-a-time loop; more needs `tinylab.engine.Engine.generate_batch_multi` (always present here) and, at `temperature > 0`, changes which tokens get sampled. A separate key from `batch_size` on purpose — see `docs/architecture.md`. | `1` | chat |
+| `eval_workers` | Threads scoring a generative batch's completions (HumanEval sandboxes each in its own subprocess). | `1` | chat |
 | `num_samples` | Samples per problem. | `1` | chat |
 | `max_new_tokens` | Generation length cap. | `256` | chat |
 | `temperature` | Sampling temperature. | `0.0` (greedy) | chat |
 | `top_k` | Sampling top-k. | `50` | chat |
-| `max_problems` | Caps problems per task (for a fast smoke run). | unset (every problem) | chat |
+| `max_problems` | Caps problems per task (for a fast smoke run). Leave unset for a real run: uncapped GSM8K (~1319)/HumanEval (~164) is what `generative_batch_size` exists to make affordable. | unset (every problem) | chat |
 
 ## `chat`
 
@@ -152,6 +154,34 @@ Read by `python -m tinylab chat <job.json>`, not by the pipeline. Required: `mod
 | `top_k` | Sampling top-k. | `50` |
 | `max_tokens` | Generation length cap, per turn. | `256` |
 | `prompt` | If present: send this one message, print the reply, and exit — instead of an interactive REPL. | unset (REPL) |
+
+## Training two differently-vocabbed models
+
+A job isn't limited to one tokenizer. `prepare`, `train`, and `bench` each resolve their own step's
+`"tokenizer"` key independently (falling back to the run's default only when a step doesn't set
+one), so a job that trains, say, a 32k-vocab model and an 8k-vocab model side by side names each
+step's tokenizer explicitly rather than putting one in `defaults`:
+
+```json
+{
+  "steps": [
+    {"name": "tok32k", "op": "tokenizer", "vocab_size": 32768, "output": "exp1_32k"},
+    {"name": "tok8k",  "op": "tokenizer", "vocab_size": 8192,  "output": "exp1_8k"},
+    {"name": "base32k", "op": "prepare", "kind": "base", "tokenizer": "exp1_32k", "shards": 100},
+    {"name": "base8k",  "op": "prepare", "kind": "base", "tokenizer": "exp1_8k",  "shards": 100},
+    {"name": "pre32k", "op": "train", "kind": "base", "tokenizer": "exp1_32k", "model_config": "m32k.json"},
+    {"name": "pre8k",  "op": "train", "kind": "base", "tokenizer": "exp1_8k",  "model_config": "m8k.json"}
+  ]
+}
+```
+(only the tokenizer-relevant keys are shown — a real `train` step still needs `sequence_len`,
+`total_batch_size`, `num_iterations`, `eval_tokens`, `world_size`, etc., same as any other.)
+
+Each `train` step's checkpoint records *its own* tokenizer (`meta_<step>.json`'s `model_config.
+tokenizer.name`), not the run's default, so a later `bench`/`chat` step that omits `"tokenizer"`
+still loads the right one automatically. `prepare`'s auto dataset name embeds the tokenizer's
+fingerprint (`{climbmix|sft}_t<sequence_len>_<fingerprint>`), so two tokenizers never collide on
+one dataset directory even with everything else (kind, sequence_len) identical.
 
 ## Glossary: `output_tag`, `source_tag`, `model_tag`, and what a tag is
 

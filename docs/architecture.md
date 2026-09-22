@@ -144,7 +144,14 @@ the job state file — see "Resume: the job state file" above.
   `get_device()`); `tinylab.engine.Engine.generate_batch` is the adapter that additionally
   satisfies `benchcore.Generator`, which GSM8K/HumanEval's generative scoring needs — this adapter
   has to live in the host, not in either subsystem, since it's the one place that knows both a
-  model and a tokenizer.
+  model and a tokenizer. `Engine.generate_batch_multi` is the optional half of that protocol:
+  several *different* prompts decoded together in one right-ragged batch (`modelcore.generate.
+  collect_batch_multi`) rather than one problem at a time. `bench`'s `suite: "chat"` step always
+  passes a real `Engine`, so setting the job key `generative_batch_size` above `1` is what turns
+  batching on for GSM8K/HumanEval — identical results at `temperature: 0`, and the point of it:
+  uncapped GSM8K (~1319 problems) and HumanEval (~164) one-at-a-time can cost more than training
+  the model did (see `nanochat/docs/contest.md`'s Stage notes on `chat_eval`'s `-B` flag, the same
+  mechanism this ports).
 - **`tinylab.checkpoints`** owns tag/step naming and `meta.json`'s extra fields on top of
   `modelcore.store.FileSystemStore`, which owns the actual model/optimizer artifact format.
 
@@ -186,22 +193,33 @@ from, and writing its result into, the same directory.
 
 ### Several tokenizers
 
-A job's `"tokenizer"` (a `COMMON_KEYS` entry, so it lives in `defaults`) is a bare name —
-`<base_dir>/tokenizers/<name>/` — or, if it contains a path separator, a path (relative ones made
-absolute against the job file's own directory in `job.resolve_steps`, the same rule `model_config`
-follows). `Context.tokenizer_for(spec)` loads and memoizes one instance *per resolved directory*;
-`Context.tokenizer` is the run's own. It is one tokenizer per run, read off the first step like
-`"device"` — a per-step tokenizer would break the dataset↔model fingerprint agreement a run depends on.
+A job's `"tokenizer"` (a `COMMON_KEYS` entry) is a bare name — `<base_dir>/tokenizers/<name>/` —
+or, if it contains a path separator, a path (relative ones made absolute against the job file's
+own directory in `job.resolve_steps`, the same rule `model_config` follows). `Context.tokenizer_for
+(spec)` loads and memoizes one instance *per resolved directory*, so two specs naming the same
+directory share one loaded instance.
+
+Unlike `"device"`, `"tokenizer"` is resolved **per step**, not once for the whole run:
+`ops.{prepare,train,bench}.run` each call `ctx.tokenizer_for(cfg.get("tokenizer"))` themselves,
+falling back to the run's default (`Context.tokenizer`/`tokenizer_spec`, still read off the first
+resolved step, same as `"device"`) only when a step doesn't set its own. This is what lets one job
+train several differently-vocabbed models side by side — a `prepare`/`train`/`bench` step for each
+tokenizer, rather than one job file per tokenizer (see docs/job-file.md's "Training two
+differently-vocabbed models"). It's also what keeps the dataset↔model fingerprint agreement a run
+depends on: a step's dataset (via `prepare.default_dataset_name`) and its model are checked against
+*that step's own* tokenizer, whichever one it names, not against some other step's.
 
 Only the `default` tokenizer is ever created for you (copied from the bundled vocab). A missing
 *named* one raises instead of copying the bundled vocab under that name: the two would be
 fingerprint-identical, so no check downstream could tell the user got the wrong tokenizer.
 
 A checkpoint records which tokenizer it was trained with — `ops.train` writes
-`model_config["tokenizer"] = {"name", "fingerprint", "vocab_size", "special_tokens"}` (modelcore
-carries that block opaquely; see its own docs) — and `checkpoints.build_model` resolves the tokenizer
-to load in order: the run's `"tokenizer"` if set, else that recorded name, else the default. The
-existing vocab-size assert and fingerprint check then catch a wrong *selection*.
+`model_config["tokenizer"] = {"name", "fingerprint", "vocab_size", "special_tokens"}` via
+`Context.tokenizer_name_for(spec)` (modelcore carries that block opaquely; see its own docs), naming
+*that train step's own* tokenizer, not the run's default — and `checkpoints.build_model` resolves
+the tokenizer to load in order: an explicit `tokenizer_spec` argument (the caller's own step's
+`"tokenizer"`, if set) if given, else that recorded name, else the default. The existing vocab-size
+assert and fingerprint check then catch a wrong *selection*.
 
 `ops.train` also stamps `template`: a `kind: sft` checkpoint declares `"nanochat"` (the chat format
 `tinylab.tokenizer.render_conversation` renders), a base one keeps whatever its `model_config` said.

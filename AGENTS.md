@@ -109,9 +109,15 @@ anywhere.)
   ships a committed default vocab.
 - **Only the `default` tokenizer is ever created for you.** A missing named one raises rather than
   copying the bundled vocab under that name — the copy would be fingerprint-identical, so no
-  downstream identity check could catch the user getting the wrong tokenizer. A run has one
-  tokenizer (`"tokenizer"`, read off the first step like `"device"`); a checkpoint records its own
-  (`model_config["tokenizer"]`) and `bench`/`chat` fall back to that when the job names none.
+  downstream identity check could catch the user getting the wrong tokenizer.
+- **`"tokenizer"` is resolved per step, not once for the whole run.** `prepare`/`train`/`bench`
+  each call `ctx.tokenizer_for(cfg.get("tokenizer"))` themselves, falling back to the run's default
+  (`"tokenizer"` read off the first resolved step, like `"device"`) only when a step omits it. A
+  job training several differently-vocabbed models sets `"tokenizer"` on each relevant step instead
+  of putting one in `defaults` — see `docs/job-file.md`'s "Training two differently-vocabbed
+  models". A checkpoint records *its own* train step's tokenizer (`model_config["tokenizer"]`, via
+  `Context.tokenizer_name_for`, not the run's default), and `bench`/`chat` fall back to that
+  recorded name when the step names none of its own.
 - **Checkpoint tags are arbitrary text with `/` folders, and share one namespace.** There is no
   `source` key and no `base_`/`chatsft_` directory: `output_tag`/`source_tag`/`model_tag` are each a
   complete address under `<base_dir>/checkpoints/`. Consequence: a base and an sft checkpoint can no
