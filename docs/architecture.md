@@ -263,9 +263,9 @@ tinylab is the minimal host: one job file, five things it can do. Relative to `n
 architecture-playground host built on the same three subsystems), tinylab now has fp8, doc-masking,
 LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
 adapter-override keys), periodic checkpointing and resume (`"save_every"`, `--resume` — see
-"Resume: the job state file" above), and tokenizer training (the `tokenizer` op), but still no wandb
-logging, no fp16 `GradScaler`, no mid-training CORE/sample eval (only periodic val-bpb), and no
-`torch.compile` in its own training loop (see "Why the training loop is eager" below). None of
+"Resume: the job state file" above), tokenizer training (the `tokenizer` op), and `torch.compile`
+in its own training loop (see "Why the training loop is compiled" below), but still no wandb
+logging, no fp16 `GradScaler`, and no mid-training CORE/sample eval (only periodic val-bpb). None of
 these are bugs — they're `nanochat`'s job, not tinylab's; adding one back means porting it the same
 way everything else here was ported, not inventing it fresh.
 
@@ -289,13 +289,32 @@ close to what `contest.sh`'s CSV-grep achieves, though `contest.sh` skips finish
 rows* (a coarser unit than tinylab's individual steps) and additionally resumes a `train` step's
 own interrupted training loop, not just whole-step granularity.
 
-## Why the training loop is eager
+## Why the training loop is compiled
 
-`tinylab.ops.train`'s own forward/backward loop never calls `torch.compile` — deliberately, so a
-job's very first training step can't stall inside a cold compiled-kernel cache the first time it
-runs in a fresh environment (real, once-per-environment behavior on some backends, not a bug).
-`modelcore.optim.MuonAdamW.step` is unconditionally compiled internally regardless — that's an
-invariant owned by modelcore, not something tinylab's own loop controls or can opt out of.
+`tinylab.ops.train`'s forward/backward loop calls `torch.compile(model, dynamic=False)` right
+after fp8 conversion (ordering matters -- fp8 must wrap the model's Linears first, matching
+`nanochat/scripts/base_train.py`'s own comment on this exact ordering), using an `orig_model`
+reference (uncompiled) for the optimizer and every checkpoint save -- a compiled module's
+`state_dict()` keys gain an `_orig_mod.` prefix otherwise (`nanochat/nanochat/checkpoint_manager.py`
+has the same strip-hack for exactly this reason). `modelcore.optim.MuonAdamW.step` is additionally,
+unconditionally compiled internally regardless -- that's an invariant owned by modelcore, not
+something tinylab's own loop controls or can opt out of.
+
+This was deliberately *not* the case at first, so that a job's very first training step couldn't
+stall inside a cold compiled-kernel cache the first time it runs in a fresh environment (real,
+once-per-environment behavior on some backends, not a bug). Reversed after a real measurement on
+experiment 01 (`llmllab/experiments/01-ffn-width-vs-heads`, 1x H200 SXM, d12 GPT, fp8): the eager
+loop measured ~11% MFU (3.67s/step) against a documented ~40% planning assumption; adding the
+compile call raised it to ~47% MFU (0.86s/step steady-state) -- a 4.27x speedup, consistent with
+`nanochat/docs/contest.md`'s own eager-vs-compiled numbers (its eager run is called "crippled
+mode" in that doc's own words). The stall is real but one-time and bounded (~80s measured for this
+model/GPU, once, at step 0) -- not worth paying roughly 4x the wall-clock and $ on every subsequent
+step, on every real run this host exists to make cheap and unattended, to avoid it. `pytest`'s own
+CPU run pays a version of this cost too (Inductor's CPU backend, not CUDA-specific), but only once
+per machine: Inductor persists compiled artifacts to an on-disk cache keyed by graph/shape, so a
+cold-cache suite run took ~28s (vs. ~7s before this change) and every run after that was back down
+to ~7-8s, reusing the cache. Comfortably fast enough either way, not worth special-casing off for
+tests.
 
 ## Where things come from
 

@@ -96,10 +96,16 @@ anywhere.)
   sized at `sequence_len * 10` when the model is built, and exceeding it is a hard error, not a
   truncation. `jobs/smoke.json` trains at `sequence_len: 2048` for exactly this reason, even
   though the model itself is tiny (`configs/gpt_d4.json`, a 4-layer tree).
-- **`train`'s own forward/backward loop is eager — no `torch.compile`.** This keeps a job's very
-  first step from being the one that first triggers a cold compiled-kernel cache on whatever
-  backend it's running on. `modelcore.optim.MuonAdamW.step` is compiled regardless, internally —
-  tinylab's own loop doesn't control or opt out of that. See `docs/architecture.md`.
+- **`train`'s own forward/backward loop calls `torch.compile(model, dynamic=False)`** (fp8 first,
+  then compile — ordering matters), using an uncompiled `orig_model` for the optimizer and every
+  checkpoint save (a compiled module's `state_dict()` keys gain an `_orig_mod.` prefix otherwise).
+  This costs a one-time cold-compile stall on a job's very first step (~80s measured on a real
+  H200/d12 run) in exchange for ~4x steady-state throughput (~11%→~47% MFU, measured on experiment
+  01) — worth it for real runs. `pytest`'s own CPU run pays a version of the same cost once per
+  machine (Inductor's on-disk cache persists across runs: ~28s cold, ~7-8s every run after).
+  `modelcore.optim.MuonAdamW.step` is compiled regardless, internally,
+  independent of this — tinylab's own loop doesn't control or opt out of that either way. See
+  `docs/architecture.md`'s "Why the training loop is compiled".
 - **A `tokenizer` step (if a job file uses one) must come before any step that loads *that same*
   tokenizer.** `Context.tokenizer_for` is a lazily-built cache keyed by resolved directory — the
   first op in a run to touch a given tokenizer wins, and every op after that

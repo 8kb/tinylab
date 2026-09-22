@@ -23,6 +23,8 @@ through job.run_file). See "Resume" in the run() docstring below.
 import dataclasses
 import time
 
+import torch
+
 from datacore import DatasetMismatch, FileSystemDatasetStore
 from modelcore import OptimizerHparams
 from modelcore.kernels.flash_attn import build_doc_args
@@ -282,6 +284,24 @@ def run(cfg: dict, ctx) -> dict:
         print0(f"[{cfg['name']}] fp8: {fp8_report.num_converted}/{fp8_report.num_linear} Linear converted")
     fp8_eval = cfg.get("fp8_eval", True)
 
+    # Compile the model for the train/eval forward, matching nanochat's scripts/base_train.py
+    # exactly (fp8 first, then compile -- ordering matters, see that script's own comment).
+    # orig_model (uncompiled) is what the optimizer and checkpoint save must use -- a compiled
+    # module's state_dict keys gain an "_orig_mod." prefix (nanochat/nanochat/checkpoint_manager.py
+    # has the same strip-hack for exactly this reason).
+    #
+    # This used to be deliberately skipped (see tinylab/docs/architecture.md's git history for
+    # "Why the training loop is eager") to avoid a cold-compile stall on a job's very first step.
+    # Reversed after a real measurement on experiment 01 (ffn-width-vs-heads, 1x H200 SXM, d12
+    # GPT, fp8): the eager loop measured ~11% MFU (3.67s/step) against a documented ~40% planning
+    # assumption; adding this one call raised it to ~47% MFU (0.86s/step steady-state), a 4.27x
+    # speedup, and lines up with nanochat/docs/contest.md's own eager-vs-compiled numbers (eager:
+    # "crippled mode" in that doc's own words). The stall itself is real but one-time and bounded
+    # (~80s measured for this model/GPU, once, at step 0) -- not worth 4x the wall-clock and $ on
+    # every step after it for every real run this host exists to make cheap and unattended.
+    orig_model = model
+    model = torch.compile(model, dynamic=False)
+
     optimizer_hparams_kwargs = dict(
         unembedding_lr=cfg.get("unembedding_lr", 0.008 if kind == "base" else 0.004),
         embedding_lr=cfg.get("embedding_lr", 0.3),
@@ -293,7 +313,7 @@ def run(cfg: dict, ctx) -> dict:
         optimizer_hparams_kwargs["adapter_lr"] = cfg["adapter_lr"]
     if "adapter_scalar_lr" in cfg:
         optimizer_hparams_kwargs["adapter_scalar_lr"] = cfg["adapter_scalar_lr"]
-    optimizer = manager.create_optimizer(model, OptimizerHparams(**optimizer_hparams_kwargs))
+    optimizer = manager.create_optimizer(orig_model, OptimizerHparams(**optimizer_hparams_kwargs))
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
 
@@ -346,7 +366,7 @@ def run(cfg: dict, ctx) -> dict:
         if kind == "sft":
             meta_data["base_model_tag"] = base_model_tag
             meta_data["base_model_step"] = base_model_step
-        checkpoints.save_checkpoint(checkpoint_dir, step, model.state_dict(), optimizer.state_dict(), meta_data, rank=ddp_rank)
+        checkpoints.save_checkpoint(checkpoint_dir, step, orig_model.state_dict(), optimizer.state_dict(), meta_data, rank=ddp_rank)
         # Only after the save above has fully returned -- this is the signal job.run_file's job
         # state file trusts as "this step is safely resumable from here" (see ctx.record_checkpoint
         # and the resume-detection block above). Firing it any earlier would defeat the whole point.
