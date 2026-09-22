@@ -13,7 +13,8 @@ from tinylab.runtime import get_base_dir, print0
 # error rather than silently accepted and ignored.
 _COMMON_KEYS = {"suite", "model_tag", "model_step"}
 _CORE_KEYS = {"max_per_task"}
-_CHAT_KEYS = {"tasks", "batch_size", "num_samples", "max_new_tokens", "temperature", "top_k", "max_problems"}
+_CHAT_KEYS = {"tasks", "batch_size", "num_samples", "max_new_tokens", "temperature", "top_k", "max_problems",
+              "generative_batch_size", "eval_workers"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -24,10 +25,13 @@ def accepted_keys(cfg: dict) -> set:
 
 def _load(cfg, ctx):
     """Loads the checkpoint cfg names: cfg["model_tag"] is its whole address, cfg["model_step"] a
-    specific step (default: latest). Returns (model, tokenizer, meta_data)."""
+    specific step (default: latest). tokenizer_spec is this step's own "tokenizer" key if set
+    (see Context.tokenizer_for), else None -- checkpoints.load_model then falls back to whatever
+    tokenizer the checkpoint's own config says it was trained with. Returns (model, tokenizer,
+    meta_data)."""
     assert "model_tag" in cfg, "bench: 'model_tag' is required"
     return checkpoints.load_model(cfg["model_tag"], ctx.device, phase="eval", step=cfg.get("model_step"),
-                                  tokenizer_spec=ctx.tokenizer_spec)
+                                  tokenizer_spec=cfg.get("tokenizer"))
 
 
 def _run_core(cfg, ctx, model, tokenizer):
@@ -45,7 +49,11 @@ def _run_core(cfg, ctx, model, tokenizer):
 def _run_chat(cfg, ctx, model, tokenizer):
     """suite="chat": scores model against cfg["tasks"] (default: all of ARC-Easy, ARC-Challenge,
     MMLU, GSM8K, HumanEval), generating with tinylab.engine.Engine as the benchcore.Generator
-    adapter. Returns {"op": "bench", "suite": "chat", "chatcore_metric", "results"}."""
+    adapter. "generative_batch_size" (default 1) and "eval_workers" (default 1) are deliberately
+    separate from "batch_size": batch_size stays "problems per forward" in the categorical
+    (ARC/MMLU) loop, and reusing it for the generative (GSM8K/HumanEval) loop would silently
+    change the numbers of any existing job that already sets batch_size. Returns
+    {"op": "bench", "suite": "chat", "chatcore_metric", "results"}."""
     from benchcore import build_chat_tasks
     task_names = cfg.get("tasks")
     try:
@@ -57,6 +65,7 @@ def _run_chat(cfg, ctx, model, tokenizer):
         tasks, model, tokenizer, generator=generator, batch_size=cfg.get("batch_size", 1),
         num_samples=cfg.get("num_samples", 1), max_new_tokens=cfg.get("max_new_tokens", 256),
         temperature=cfg.get("temperature", 0.0), top_k=cfg.get("top_k", 50), max_problems=cfg.get("max_problems"),
+        generative_batch_size=cfg.get("generative_batch_size", 1), eval_workers=cfg.get("eval_workers", 1),
         device=ctx.device, rank=ctx.rank, world_size=ctx.world_size,
     )
     for name, acc in report.results.items():

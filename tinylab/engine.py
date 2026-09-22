@@ -13,14 +13,16 @@ generate_with_tools takes.
 
 Engine.generate_batch satisfies benchcore.protocols.Generator unmodified, so the same instance
 tinylab's `chat` command drives interactively is what tinylab.ops.bench hands to
-BenchManager.chat/chat_suite for GSM8K/HumanEval scoring.
+BenchManager.chat/chat_suite for GSM8K/HumanEval scoring. Engine.generate_batch_multi is the
+optional half of that protocol (several DIFFERENT prompts decoded together) -- feature-detected
+by BenchManager's generative eval loop via getattr, see tinylab.ops.bench's generative_batch_size.
 """
 import signal
 import warnings
 from contextlib import contextmanager
 
 from modelcore import ModelManager
-from modelcore.generate import ToolSpec, collect_batch, generate_with_tools
+from modelcore.generate import ToolSpec, collect_batch, collect_batch_multi, generate_with_tools
 
 # -----------------------------------------------------------------------------
 # Calculator tool helpers
@@ -90,9 +92,11 @@ class Engine:
         return self.tokenizer.encode(str(result))
 
     def generate(self, tokens, num_samples=1, max_tokens=None, temperature=1.0, top_k=None, seed=42):
-        """Single prefill, then decode num_samples rows from a shared KV cache. Yields
+        """Single prefill, then decode num_samples rows from a shared KV cache. `tokens` may also
+        be several prompts (list[list[int]]) decoded together -- see generate_batch_multi. Yields
         (token_column, token_masks) per step: mask=0 where a token was tool-forced, 1 if sampled."""
-        assert isinstance(tokens, list) and isinstance(tokens[0], int), "expecting list of ints"
+        assert isinstance(tokens, list) and tokens and (isinstance(tokens[0], int) or isinstance(tokens[0], list)), \
+            "expecting list of ints (or a list of such lists)"
 
         get_special = lambda s: self.tokenizer.encode_special(s)
         python_start = get_special("<|python_start|>")
@@ -116,3 +120,15 @@ class Engine:
         bos = self.tokenizer.get_bos_token_id()
         stream = self.generate(tokens, num_samples, **kwargs)
         return collect_batch(stream, {assistant_end, bos}, tokens, num_samples)
+
+    def generate_batch_multi(self, prompts, num_samples=1, **kwargs):
+        """
+        generate_batch for several DIFFERENT prompts decoded in one batch (benchcore's optional
+        Generator.generate_batch_multi). Returns (results, masks): one group per prompt, each of
+        num_samples token sequences prefixed with that prompt. At temperature 0 every group equals
+        what generate_batch would return for that prompt alone.
+        """
+        assistant_end = self.tokenizer.encode_special("<|assistant_end|>")
+        bos = self.tokenizer.get_bos_token_id()
+        stream = self.generate([list(p) for p in prompts], num_samples, **kwargs)
+        return collect_batch_multi(stream, {assistant_end, bos}, [list(p) for p in prompts], num_samples)
