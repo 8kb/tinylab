@@ -83,6 +83,8 @@ def test_train_then_load_then_generate(base_dir):
 
     model, loaded_tokenizer, meta = load_model("pre", torch.device("cpu"), phase="eval")
     assert meta["val_bpb"] == pytest.approx(result["val_bpb"])
+    assert meta["min_val_bpb"] == pytest.approx(result["val_bpb"])  # only one eval happened
+    assert meta["smooth_train_loss"] > 0  # an EMA of at least one real step's loss
     # The checkpoint says which tokenizer it needs, and how it is talked to (a base run keeps the
     # template its model_config named).
     saved = meta["model_config"]

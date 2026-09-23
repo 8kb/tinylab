@@ -15,6 +15,13 @@ def test_init_lr_frac_and_load_optimizer_are_sft_only():
     assert not {"init_lr_frac", "load_optimizer"} & accepted_keys({"kind": "base"})
 
 
+def test_fp8_recipe_is_not_an_accepted_key():
+    """modelcore only ever implements one fp8 recipe ("tensorwise") -- there was never a real
+    choice for a job file to make, so the key is gone, not just defaulted."""
+    assert "fp8_recipe" not in accepted_keys({"kind": "base"})
+    assert "fp8_recipe" not in accepted_keys({"kind": "sft"})
+
+
 def test_lr_multiplier_ramps_up_during_warmup_and_holds_at_one():
     get_lr, _get_momentum = _lr_schedule(num_iterations=100, warmup_steps=10, warmdown_ratio=0.5, final_lr_frac=0.1, momentum_warmup_steps=400)
     assert get_lr(0) < get_lr(5) < get_lr(9)

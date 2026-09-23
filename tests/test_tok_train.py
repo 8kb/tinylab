@@ -84,6 +84,7 @@ def test_tokenizer_op_trains_and_writes_a_real_tokenizer_against_a_local_fixture
 
     assert result["op"] == "tokenizer"
     assert result["vocab_size"] == _MIN_VOCAB_SIZE + 10
+    assert result["chars_per_token"] > 0  # compression stat, measured over the same fixture corpus
     assert not downloaded  # the fixture file already exists -- no download should have been attempted
 
     tokenizer_dir = os.path.join(base_dir, "tokenizers", "default")

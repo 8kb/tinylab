@@ -33,6 +33,7 @@ fresh start or a continuation is a fact about the invocation, not the pipeline. 
 | `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers, `"format": "modelcore.v2"`) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. A `modelcore.v1` file still loads (modelcore upgrades it). Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
 | `world_size` | The GPU count a `train` step's `total_batch_size`/grad-accum arithmetic assumes — checked against the actual launch (e.g. `torchrun --nproc_per_node`) and a hard error on mismatch, since the job file fixes GPU count rather than tinylab inferring it. Irrelevant to `prepare`/`bench`. Required by `train`. | — |
 | `tokenizer` | Which tokenizer this step uses: a **bare name** (`"bpe32k"` → `<base_dir>/tokenizers/bpe32k/`) or, if the value contains a path separator, a **path** (`"./toks/mine"`; relative paths resolve against the job file's own directory, like `model_config`). Read **per step**, not once for the whole run: a step without its own `"tokenizer"` falls back to the run's default (read off the first resolved step, same as `device` — put it in `defaults` for the common case of one tokenizer per run). A job training several differently-vocabbed models sets `"tokenizer"` on each `prepare`/`train`/`bench` step that needs a non-default one instead — see "Training two differently-vocabbed models" below. The default one is tinylab's bundled vocab, copied to `<base_dir>/tokenizers/default/` on first use; any other name must already exist (train it with a `tokenizer` step first). `bench`/`chat` pick up the checkpoint's own recorded tokenizer on their own when this is unset, and refuse to load it with one whose fingerprint differs. | run's default, else `"default"` |
+| `log_dir` | Where `python -m tinylab job.json` (not `--dry-run`) writes this run's log files: `<base_dir>/<log_dir>/<job_name>.log` (the whole run) plus `<base_dir>/<log_dir>/<job_name>-<step_name>.log` per executed step. One value for a whole run, like `device` — put it in `defaults`. Same 1-4-`/`-joined-names format as a checkpoint tag (see the glossary below); no built-in fallback location, so a run with no `log_dir` set is a hard error before any step executes. | **required** |
 
 ## `prepare`
 
@@ -92,8 +93,7 @@ AGENTS.md.
 | `eval_every` | Run a val-bpb pass every N steps (plus always at the final step). `0` disables eval entirely, including at the final step. | `50` | both |
 | `eval_tokens` | Tokens to evaluate per val pass. | required | both |
 | `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `-1` disables periodic saving (today's behavior: final step only). No pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows disk usage without bound. | `-1` | both |
-| `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`; needs an H100+ GPU). | `false` | both |
-| `fp8_recipe` | FP8 scaling recipe (only `"tensorwise"` is implemented). | `"tensorwise"` | both |
+| `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`, always its own "tensorwise" recipe -- the only one implemented; needs an H100+ GPU). | `false` | both |
 | `fp8_eval` | When `fp8` is on, measure val bpb directly in fp8 (`true`) instead of converting back to bf16 first (`false`). Irrelevant without `fp8`. | `true` | both |
 | `doc_masking` | Restrict attention to within each packed row's own document (BOS-delimited), instead of allowing attention across document boundaries within a row. | `false` | both |
 | `doc_masking_max_docs_per_row` | Override `build_doc_args`'s default per-row document budget (`DEFAULT_MAX_DOCS_PER_ROW=64`). | unset | both |
@@ -188,10 +188,11 @@ one dataset directory even with everything else (kind, sequence_len) identical.
 ## Glossary: `output_tag`, `source_tag`, `model_tag`, and what a tag is
 
 There is one checkpoint namespace, `<base_dir>/checkpoints/<tag>/`, and **the tag is the whole
-address**. It is arbitrary text, optionally with `/` folders: `gpt-d12-base`, `kvcache/d13-chat`,
-`experiments/2026-09/run3`. What *kind* of checkpoint it is — pretrained, fine-tuned, whatever comes
-next — is yours to say in the tag; nothing in the path encodes it. (Rejected: an empty tag, an
-absolute one, a backslash, and any empty, `.` or `..` segment.)
+address**. It is 1 to 4 `/`-joined names: `gpt-d12-base`, `kvcache/d13-chat`,
+`experiments/run3`. Each name is 1-16 characters from `[A-Za-z0-9_-]` — letters, digits, `_`, `-`,
+nothing else (`tinylab.checkpoints.validate_name`/`validate_tag`). What *kind* of checkpoint it is
+— pretrained, fine-tuned, whatever comes next — is yours to say in the tag; nothing in the path
+encodes it. The same rule validates a job's `log_dir` (see below) and every step's own `name`.
 
 Three job keys name a tag, and all three are complete addresses:
 

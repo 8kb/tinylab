@@ -17,8 +17,9 @@ import hashlib
 import json
 import os
 import time
+from contextlib import nullcontext
 
-from tinylab.checkpoints import validate_tag
+from tinylab.checkpoints import validate_name, validate_tag
 from tinylab.ops import COMMON_KEYS, OPS
 
 
@@ -102,22 +103,20 @@ def _resolve_tokenizer_specs(step: dict, job_dir: str, *, where: str):
             step[key] = expanded if os.path.isabs(expanded) else os.path.normpath(os.path.join(job_dir, expanded))
 
 
-def _check_checkpoint_tags(step: dict, *, where: str):
-    """A checkpoint tag is arbitrary text with optional "/" folders (see tinylab.checkpoints.
+def _check_tag_shaped_keys(step: dict, *, where: str):
+    """A tag (checkpoint or "log_dir") is 1-4 "/"-joined names (see tinylab.checkpoints.
     validate_tag) -- checked here so a bad one is a JobError up front, not a ValueError after a
-    prepare step has already spent an hour. A train step with no explicit "output_tag" uses its own
-    "name" as the tag, so that gets the same check."""
-    for key in ("output_tag", "source_tag", "model_tag"):
+    prepare step has already spent an hour (or, for "log_dir", after a run has already logged
+    somewhere). A train step with no explicit "output_tag" uses its own "name" as the tag instead,
+    but that needs no separate check here: every step's "name" is already validated as a single
+    valid name (resolve_steps's own loop, before this function ever runs), which is by
+    construction also a valid 1-segment tag."""
+    for key in ("output_tag", "source_tag", "model_tag", "log_dir"):
         if key in step:
             try:
-                validate_tag(step[key])
+                validate_tag(step[key], label=key)
             except ValueError as e:
                 raise JobError(f"{where}, {key!r}: {e}") from None
-    if step.get("op") == "train" and "output_tag" not in step:
-        try:
-            validate_tag(step["name"])
-        except ValueError as e:
-            raise JobError(f"{where}: this step has no \"output_tag\", so its \"name\" is its checkpoint tag -- {e}") from None
 
 
 def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> list[dict]:
@@ -136,6 +135,10 @@ def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> l
     for i, raw_step in enumerate(steps):
         if "name" not in raw_step:
             raise JobError(f"steps[{i}]: missing required key 'name'")
+        try:
+            validate_name(raw_step["name"], label="step name")
+        except ValueError as e:
+            raise JobError(f"steps[{i}]: {e}") from None
         if "op" not in raw_step:
             raise JobError(f"steps[{i}] ({raw_step['name']!r}): missing required key 'op'")
         op = raw_step["op"]
@@ -149,7 +152,7 @@ def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> l
         check_known_keys(step, accepted, where=where)
         _resolve_model_config_path(step, job_dir, where=where)
         _resolve_tokenizer_specs(step, job_dir, where=where)
-        _check_checkpoint_tags(step, where=where)
+        _check_tag_shaped_keys(step, where=where)
         resolved.append(step)
 
     if only is not None:
@@ -167,8 +170,19 @@ def resolve_chat(job: dict, *, job_dir: str = "") -> dict:
     cfg = _deep_merge(job.get("defaults", {}), job.get("chat", {}))
     if cfg:
         _resolve_tokenizer_specs(cfg, job_dir, where='"chat"')
-        _check_checkpoint_tags(cfg, where='"chat"')
+        _check_tag_shaped_keys(cfg, where='"chat"')
     return cfg
+
+
+def _job_stem(job_path: str) -> str:
+    """The job file's own basename, no directory, no extension -- validated the same way a step
+    name is (see checkpoints.validate_name), since it's used as a literal filename component both
+    here (job state file) and in the general/per-step log filenames below."""
+    stem = os.path.splitext(os.path.basename(job_path))[0]
+    try:
+        return validate_name(stem, label="job file name")
+    except ValueError as e:
+        raise JobError(f"{job_path}: {e}") from None
 
 
 def _state_path(job_path: str) -> str:
@@ -179,11 +193,30 @@ def _state_path(job_path: str) -> str:
     different directories don't collide, while staying legible in a directory listing."""
     from tinylab.runtime import get_base_dir
     abs_path = os.path.abspath(job_path)
-    stem = os.path.splitext(os.path.basename(job_path))[0]
+    stem = _job_stem(job_path)
     digest = hashlib.sha256(abs_path.encode()).hexdigest()[:8]
     state_dir = os.path.join(get_base_dir(), "job_state")
     os.makedirs(state_dir, exist_ok=True)
     return os.path.join(state_dir, f"{stem}-{digest}.json")
+
+
+def _log_dir_path(log_dir: str) -> str:
+    from tinylab.runtime import get_base_dir
+    return os.path.join(get_base_dir(), log_dir)
+
+
+def _general_log_path(job_path: str, log_dir: str) -> str:
+    """<base_dir>/<log_dir>/<job_name>.log -- everything not specific to one step (run start/
+    finish, a step's own start header and result, the final job-state dump, a top-level failure).
+    See job.run_file's own docstring."""
+    return os.path.join(_log_dir_path(log_dir), f"{_job_stem(job_path)}.log")
+
+
+def _step_log_path(job_path: str, log_dir: str, step_name: str) -> str:
+    """<base_dir>/<log_dir>/<job_name>-<step_name>.log -- one op's own print0 output for one step,
+    and nothing else (the filename already names the step, so runtime.log_to_file strips a
+    redundant leading "[step_name] " from each line written here)."""
+    return os.path.join(_log_dir_path(log_dir), f"{_job_stem(job_path)}-{step_name}.log")
 
 
 def _state_exists(path: str) -> bool:
@@ -240,10 +273,12 @@ def _read_state(path: str) -> dict | None:
             except (json.JSONDecodeError, OSError):
                 continue
             if i == 1:
-                print(f"warning: {path} is missing or unreadable -- resuming from the previous generation ({candidate}) instead, which may be one checkpoint behind.")
+                from tinylab.runtime import print0
+                print0(f"warning: {path} is missing or unreadable -- resuming from the previous generation ({candidate}) instead, which may be one checkpoint behind.")
             return content
     if os.path.exists(path) or os.path.exists(path + ".old"):
-        print(f"warning: neither {path} nor its previous generation could be read -- resuming as a fresh start (no steps will be skipped).")
+        from tinylab.runtime import print0
+        print0(f"warning: neither {path} nor its previous generation could be read -- resuming as a fresh start (no steps will be skipped).")
     return None
 
 
@@ -288,7 +323,14 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
 
     resume=True with no existing state file is a no-op (an ordinary fresh run) -- safe to pass
     unconditionally from an unattended restart script. The state file is deleted only when every
-    step finishes without raising; a step that fails leaves it in place, exactly as intended."""
+    step finishes without raising; a step that fails leaves it in place, exactly as intended.
+
+    Logging: a real (non-dry-run) run with at least one step requires "log_dir" (one per run, read
+    off the first resolved step like "device" -- no code-level default, see docs/job-file.md).
+    Everything is written under <base_dir>/<log_dir>/: one general log (run start/finish, each
+    step's own start/result line, a top-level failure, the final job-state dump) plus one log per
+    executed step (that step's own print0 output, nothing else) -- see _general_log_path/
+    _step_log_path and runtime.log_to_file."""
     job = load(job_path)
     job_dir = os.path.dirname(os.path.abspath(job_path))
     steps = resolve_steps(job, only=only, job_dir=job_dir)
@@ -299,76 +341,107 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
         return steps
 
     from tinylab.ops import Context
-    from tinylab.runtime import compute_cleanup
+    from tinylab.runtime import compute_cleanup, log_to_file, print0
 
-    tracking = only is None
-    state_path = _state_path(job_path) if tracking else None
-    steps_state = {}  # step name -> {"status": "done"} | {"status": "in_progress", "checkpoint_step": N}
-    state_content = None
-    if tracking:
-        if _state_exists(state_path):
-            existing = _read_state(state_path)
-            # A still-alive recorded pid is refused unconditionally -- even with --resume, which
-            # is for continuing after a crash, not running a second instance alongside a live one.
-            # Two processes racing on the same checkpoint files is real corruption, not just
-            # wasted compute, so this check comes before the resume/no-resume branch below, not
-            # folded into it.
-            if existing is not None and _pid_alive(existing.get("pid")):
-                raise JobError(
-                    f"{state_path} records pid={existing['pid']}, which still appears to be "
-                    f"running -- refusing to start a second, concurrent run of the same job (this "
-                    f"applies even with --resume). If that process has genuinely exited and its "
-                    f"pid has since been reused by something unrelated, delete the job state file "
-                    f"to force a fresh start."
-                )
-            if not resume:
-                found = ", ".join(p for p in (state_path, state_path + ".old", state_path + ".tmp") if os.path.exists(p))
-                raise JobError(
-                    f"{found} already exists -- a previous run of this job may still be in "
-                    f"progress or crashed without cleanup. Pass --resume to continue it, or "
-                    f"delete it to force a fresh start."
-                )
-            steps_state = existing.get("steps", {}) if existing is not None else {}
-        state_content = _write_state(state_path, {
-            "job_path": os.path.abspath(job_path), "pid": os.getpid(), "started_at": time.time(),
-            "steps": steps_state,
-        })
+    # Format already validated (if present) by resolve_steps -> _check_tag_shaped_keys, the same
+    # as output_tag/source_tag/model_tag -- only presence is checked here, since "required" is a
+    # property of actually running (this function), not of a step's own key set.
+    log_dir = steps[0].get("log_dir") if steps else None
+    if steps and not log_dir:
+        raise JobError(
+            f"{job_path}: \"log_dir\" is required (put it in \"defaults\") -- tinylab writes no "
+            f"log files to a guessed location. Every step's own output, plus this run's general "
+            f"log, is written under <base_dir>/<log_dir>/."
+        )
 
-        def _record_progress(name: str, checkpoint_step: int) -> None:
-            nonlocal state_content
-            steps_state[name] = {"status": "in_progress", "checkpoint_step": checkpoint_step}
-            state_content = _write_state(state_path, dict(state_content, steps=steps_state))
-    else:
-        _record_progress = None
+    # nullcontext when there's nothing to run (steps == [], the only case log_dir can be unset) --
+    # everything from here down, including the job-state-file machinery, runs inside the general
+    # log so a state-file warning or a top-level failure lands there too, not just stdout.
+    general_log = log_to_file(_general_log_path(job_path, log_dir)) if log_dir else nullcontext()
+    with general_log:
+        if log_dir:
+            print0(f"=== job {_job_stem(job_path)} started (pid={os.getpid()}) ===")
 
-    resume_hints = {name: s["checkpoint_step"] for name, s in steps_state.items()
-                     if s.get("status") == "in_progress" and "checkpoint_step" in s}
+        tracking = only is None
+        state_path = _state_path(job_path) if tracking else None
+        steps_state = {}  # step name -> {"status": "done"} | {"status": "in_progress", "checkpoint_step": N}
+        state_content = None
+        if tracking:
+            if _state_exists(state_path):
+                existing = _read_state(state_path)
+                # A still-alive recorded pid is refused unconditionally -- even with --resume,
+                # which is for continuing after a crash, not running a second instance alongside a
+                # live one. Two processes racing on the same checkpoint files is real corruption,
+                # not just wasted compute, so this check comes before the resume/no-resume branch
+                # below, not folded into it.
+                if existing is not None and _pid_alive(existing.get("pid")):
+                    raise JobError(
+                        f"{state_path} records pid={existing['pid']}, which still appears to be "
+                        f"running -- refusing to start a second, concurrent run of the same job "
+                        f"(this applies even with --resume). If that process has genuinely exited "
+                        f"and its pid has since been reused by something unrelated, delete the "
+                        f"job state file to force a fresh start."
+                    )
+                if not resume:
+                    found = ", ".join(p for p in (state_path, state_path + ".old", state_path + ".tmp") if os.path.exists(p))
+                    raise JobError(
+                        f"{found} already exists -- a previous run of this job may still be in "
+                        f"progress or crashed without cleanup. Pass --resume to continue it, or "
+                        f"delete it to force a fresh start."
+                    )
+                steps_state = existing.get("steps", {}) if existing is not None else {}
+            state_content = _write_state(state_path, {
+                "job_path": os.path.abspath(job_path), "pid": os.getpid(), "started_at": time.time(),
+                "steps": steps_state,
+            })
 
-    # "device" is a COMMON_KEYS default, so every resolved step already carries it -- read it off
-    # the first one rather than re-reading job["defaults"] directly, so a step-level override (an
-    # unusual but valid case) is honored the same way the rest of a step's config is. One Context
-    # is shared for the whole run: tinylab doesn't support switching devices mid-job.
-    device_type = steps[0].get("device", "auto") if steps else "auto"
-    # Likewise "tokenizer": one per run, read off the first step (path-form values were already
-    # made absolute in resolve_steps).
-    tokenizer_spec = steps[0].get("tokenizer") if steps else None
-    ctx = Context(device_type=device_type, resume=resume, tokenizer_spec=tokenizer_spec,
-                  _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress)
-    results = []
-    try:
-        for step in steps:
-            if steps_state.get(step["name"], {}).get("status") == "done":
-                print(f"=== [{step['name']}] already completed, skipping (--resume) ===")
-                continue
-            print(f"=== [{step['name']}] op={step['op']} ===")
-            result = OPS[step["op"]].run(step, ctx)
-            print(json.dumps(result))
-            results.append(result)
-            steps_state[step["name"]] = {"status": "done"}
-            if tracking:
+            def _record_progress(name: str, checkpoint_step: int) -> None:
+                nonlocal state_content
+                steps_state[name] = {"status": "in_progress", "checkpoint_step": checkpoint_step}
                 state_content = _write_state(state_path, dict(state_content, steps=steps_state))
-    finally:
-        compute_cleanup()
-    if tracking:
-        _remove_state(state_path)  # only reached on a clean run -- a raised exception leaves it in place
+        else:
+            _record_progress = None
+
+        resume_hints = {name: s["checkpoint_step"] for name, s in steps_state.items()
+                         if s.get("status") == "in_progress" and "checkpoint_step" in s}
+
+        # "device" is a COMMON_KEYS default, so every resolved step already carries it -- read it
+        # off the first one rather than re-reading job["defaults"] directly, so a step-level
+        # override (an unusual but valid case) is honored the same way the rest of a step's config
+        # is. One Context is shared for the whole run: tinylab doesn't support switching devices
+        # mid-job.
+        device_type = steps[0].get("device", "auto") if steps else "auto"
+        # Likewise "tokenizer": one per run, read off the first step (path-form values were already
+        # made absolute in resolve_steps).
+        tokenizer_spec = steps[0].get("tokenizer") if steps else None
+        ctx = Context(device_type=device_type, resume=resume, tokenizer_spec=tokenizer_spec,
+                      _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress)
+        results = []
+        try:
+            for step in steps:
+                if steps_state.get(step["name"], {}).get("status") == "done":
+                    print0(f"=== [{step['name']}] already completed, skipping (--resume) ===")
+                    continue
+                print0(f"=== [{step['name']}] op={step['op']} ===")
+                step_log = (log_to_file(_step_log_path(job_path, log_dir, step["name"]), strip_prefix=f"[{step['name']}] ")
+                            if log_dir else nullcontext())
+                with step_log:
+                    result = OPS[step["op"]].run(step, ctx)
+                print0(json.dumps(result))
+                results.append(result)
+                steps_state[step["name"]] = {"status": "done"}
+                if tracking:
+                    state_content = _write_state(state_path, dict(state_content, steps=steps_state))
+        except Exception as e:
+            print0(f"job failed: {e!r}")
+            raise
+        finally:
+            compute_cleanup()
+        # Only reached on a clean run -- the except above re-raises, so a failed run never gets
+        # here (the job state file is left in place, exactly as intended; see this function's own
+        # docstring).
+        if tracking:
+            print0(f"job state (final): {json.dumps(state_content)}")
+            _remove_state(state_path)
+        print0("=== job finished ===")
     return results

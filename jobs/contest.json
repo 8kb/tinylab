@@ -5,7 +5,8 @@
   "defaults": {
     "device": "auto",
     "sequence_len": 2048,
-    "world_size": 4
+    "world_size": 4,
+    "log_dir": "logs"
   },
   "steps": [
     { "name": "basedata", "op": "prepare", "kind": "base", "shards": 45,

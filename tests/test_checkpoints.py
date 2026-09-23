@@ -32,18 +32,38 @@ import os
 import torch
 
 from tinylab import checkpoints
-from tinylab.checkpoints import resolve_checkpoint_dir, validate_tag
+from tinylab.checkpoints import resolve_checkpoint_dir, validate_name, validate_tag
 
 
-@pytest.mark.parametrize("bad", ["", "/abs", "a//b", "a/", "/a", "..", ".", "../x", "a/../b", "a/./b", "a\\b", "a\0b", None, 3])
-def test_validate_tag_rejects_anything_that_could_escape_or_name_nothing(bad):
+@pytest.mark.parametrize("bad", ["", "/abs", "a//b", "a/", "/a", "..", ".", "../x", "a/../b", "a/./b",
+                                  "a\\b", "a\0b", None, 3,
+                                  "a.b", "with space", "ünï", "a" * 17, "a/b/c/d/e"])
+def test_validate_tag_rejects_anything_outside_1_to_4_names(bad):
     with pytest.raises(ValueError):
         validate_tag(bad)
 
 
-@pytest.mark.parametrize("good", ["d12", "gpt-d12-base", "kvcache/d13-chat", "a/b/c", "2026-09/run.3", "with space", "ünï"])
-def test_validate_tag_accepts_arbitrary_text_with_folders(good):
+@pytest.mark.parametrize("good", ["d12", "gpt-d12-base", "kvcache/d13-chat", "a/b/c", "exp01/m1/base", "a" * 16])
+def test_validate_tag_accepts_1_to_4_names(good):
     assert validate_tag(good) == good
+
+
+@pytest.mark.parametrize("bad", ["", "a/b", "a.b", "a b", "a" * 17, None, 3])
+def test_validate_name_rejects_anything_not_a_single_short_name(bad):
+    with pytest.raises(ValueError):
+        validate_name(bad)
+
+
+@pytest.mark.parametrize("good", ["a", "d12", "gpt-d12-base", "a_b", "a" * 16])
+def test_validate_name_accepts_a_single_short_name(good):
+    assert validate_name(good) == good
+
+
+def test_validate_tag_and_validate_name_error_messages_use_the_given_label():
+    with pytest.raises(ValueError, match="log_dir"):
+        validate_tag("bad name", label="log_dir")
+    with pytest.raises(ValueError, match="step name"):
+        validate_name("bad name", label="step name")
 
 
 def test_the_tag_is_the_path_under_one_checkpoints_dir(base_dir):

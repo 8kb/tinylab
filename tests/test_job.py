@@ -205,7 +205,7 @@ def test_resume_skips_completed_steps_after_a_crash(tmp_path, base_dir, monkeypa
     liveness check is exercised for real, separately, in test_resume_refuses_when_recorded_pid_is_
     still_alive/test_resume_proceeds_when_recorded_pid_is_dead below."""
     monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
-    doc = {"steps": [
+    doc = {"defaults": {"log_dir": "logs"}, "steps": [
         {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "c", "op": "prepare", "kind": "base", "sequence_len": 8},
@@ -249,7 +249,7 @@ def test_resume_skips_completed_steps_after_a_crash(tmp_path, base_dir, monkeypa
 
 
 def test_resume_with_no_state_file_is_a_normal_fresh_run(tmp_path, base_dir, monkeypatch):
-    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     monkeypatch.setattr("tinylab.ops.prepare.run", lambda cfg, ctx: {"op": "prepare"})
     results = job.run_file(path, resume=True)
@@ -260,7 +260,7 @@ def test_resume_with_no_state_file_is_a_normal_fresh_run(tmp_path, base_dir, mon
 def test_only_bypasses_the_state_file_mechanism_entirely(tmp_path, base_dir, monkeypatch):
     """--only is a deliberate single-step override -- it must never touch the job state file, so
     it keeps working even while a previous full-pipeline run's state file still exists."""
-    doc = {"steps": [
+    doc = {"defaults": {"log_dir": "logs"}, "steps": [
         {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
     ]}
@@ -343,7 +343,7 @@ def test_resume_refuses_when_recorded_pid_is_still_alive(tmp_path, base_dir):
     """A still-alive recorded pid is refused even with resume=True -- it means a genuinely
     concurrent run, not a crashed one, and racing two processes on the same checkpoint files
     would be real corruption."""
-    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     state_path = job._state_path(path)
     job._write_state(state_path, {"job_path": path, "pid": os.getpid(), "steps": {}})
@@ -355,7 +355,7 @@ def test_resume_refuses_when_recorded_pid_is_still_alive(tmp_path, base_dir):
 
 
 def test_resume_proceeds_when_recorded_pid_is_dead(tmp_path, base_dir, monkeypatch):
-    doc = {"steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     state_path = job._state_path(path)
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -374,7 +374,8 @@ def test_train_step_records_progress_and_resume_passes_it_as_a_hint(tmp_path, ba
     tinylab.ops.train's own resume detection reads from. _pid_alive stubbed False for the same
     reason as test_resume_skips_completed_steps_after_a_crash above."""
     monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
-    doc = {"steps": [{"name": "pre", "op": "train", "kind": "base", "sequence_len": 8,
+    doc = {"defaults": {"log_dir": "logs"},
+           "steps": [{"name": "pre", "op": "train", "kind": "base", "sequence_len": 8,
                        "model_config": "cfg.json", "total_batch_size": 1, "world_size": 1,
                        "eval_tokens": 1, "num_iterations": 1}]}
     # model_config must exist on disk -- resolve_steps checks it, even though this fake op never
@@ -408,7 +409,7 @@ def test_device_propagates_to_every_op_not_just_chat(tmp_path, monkeypatch):
     tinylab.chat (which builds its own Context separately) honored a job's "device" default --
     every op silently ignored it. Confirm run_file now threads it through too."""
     doc = {
-        "defaults": {"device": "cpu", "sequence_len": 8},
+        "defaults": {"device": "cpu", "sequence_len": 8, "log_dir": "logs"},
         "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}],
     }
     path = _write_job(tmp_path, doc)
@@ -432,7 +433,8 @@ def _train_job(**step_overrides):
 
 
 @pytest.mark.parametrize("key", ["output_tag", "source_tag", "model_tag"])
-@pytest.mark.parametrize("bad", ["", "/abs", "a//b", "a/", "/a", "../x", "a/../b", "./a", "a\\b"])
+@pytest.mark.parametrize("bad", ["", "/abs", "a//b", "a/", "/a", "../x", "a/../b", "./a", "a\\b",
+                                  "a.b", "a b", "a" * 17, "a/b/c/d/e"])
 def test_a_malformed_checkpoint_tag_is_a_job_error_before_anything_runs(tmp_path, key, bad):
     op_step = {"op": "bench", "suite": "core"} if key == "model_tag" else {"op": "train", "kind": "sft"}
     doc = {"steps": [dict({"name": "a", "sequence_len": 8}, **op_step, **{key: bad})]}
@@ -440,18 +442,25 @@ def test_a_malformed_checkpoint_tag_is_a_job_error_before_anything_runs(tmp_path
         job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
 
 
-@pytest.mark.parametrize("good", ["gpt-d12-base", "kvcache/d13-chat", "exp/2026-09/run.3", "d12", "a b"])
+@pytest.mark.parametrize("good", ["gpt-d12-base", "kvcache/d13-chat", "exp/2026-09/run3", "d12", "a_b"])
 def test_any_reasonable_checkpoint_tag_is_accepted(tmp_path, good):
     doc = _train_job(output_tag=good)
     assert job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))[0]["output_tag"] == good
 
 
-def test_a_train_steps_name_is_checked_when_it_doubles_as_its_tag(tmp_path):
-    doc = _train_job(name="a/../b")
-    with pytest.raises(job.JobError, match="no .output_tag., so its .name. is its checkpoint tag"):
+def test_a_bad_step_name_is_rejected_up_front_even_before_it_would_double_as_a_tag(tmp_path):
+    """A step's "name" is validated as a single name (see checkpoints.validate_name)
+    unconditionally, in resolve_steps's own loop -- before a train step's own "no output_tag, name
+    is the tag" fallback (_check_tag_shaped_keys) would otherwise need to check it separately. A
+    slash-containing name is invalid either way, but now it's caught as a bad step name, not a bad
+    checkpoint tag."""
+    doc = _train_job(name="a/b")
+    with pytest.raises(job.JobError, match="step name"):
         job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
-    # ...but not when an explicit output_tag takes over that role
-    job.resolve_steps(job.load(_write_job(tmp_path, _train_job(name="a/../b", output_tag="ok"))), job_dir=str(tmp_path))
+    # ...an explicit output_tag doesn't rescue an invalid name either -- "name" is checked on its
+    # own terms regardless of whether it would have doubled as the tag
+    with pytest.raises(job.JobError, match="step name"):
+        job.resolve_steps(job.load(_write_job(tmp_path, _train_job(name="a/b", output_tag="ok"))), job_dir=str(tmp_path))
 
 
 def test_the_source_key_is_gone(tmp_path):
@@ -513,7 +522,7 @@ def test_chat_blocks_tokenizer_path_resolves_against_the_job_dir(tmp_path):
 
 def test_the_run_wide_tokenizer_reaches_every_ops_context(tmp_path, base_dir, monkeypatch):
     """Like "device": read off the first resolved step, so it lives in defaults."""
-    doc = {"defaults": {"device": "cpu", "sequence_len": 8, "tokenizer": "bpe32k"},
+    doc = {"defaults": {"device": "cpu", "sequence_len": 8, "tokenizer": "bpe32k", "log_dir": "logs"},
            "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}]}
     seen = {}
     def fake_run(cfg, ctx):

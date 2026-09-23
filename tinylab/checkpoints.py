@@ -12,6 +12,7 @@ would have needed a new directory for every new kind.
 """
 import json
 import os
+import re
 
 from modelcore.store import FileSystemStore
 from modelcore.store import last_step as _last_step
@@ -21,21 +22,33 @@ from tinylab.tokenizer import get_tokenizer
 
 CHECKPOINTS_DIR = "checkpoints"
 
+# One name: a filename/directory component on its own (a step name, a job-file stem, one segment
+# of a tag). Deliberately an allowlist, not a blocklist of what's unsafe -- short and predictable
+# enough to type, read in a log line, and embed directly in a filename with no further escaping.
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 
-def validate_tag(tag):
-    """A tag is arbitrary text with optional "/" folders. Rejected: anything that could resolve
-    outside <base_dir>/checkpoints/ or name no directory at all -- empty, absolute, a backslash, a
-    NUL, an empty segment (leading/trailing/doubled "/"), or a "." / ".." segment. Returns tag."""
+
+def validate_name(name, *, label="name"):
+    """A bare name: 1-16 characters, only letters/digits/"_"/"-". Used standalone for a step name
+    or a job file's own stem, and as the building block validate_tag splits a tag into. Returns
+    name."""
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        raise ValueError(f"{label} must be 1-16 characters from [A-Za-z0-9_-], got {name!r}")
+    return name
+
+
+def validate_tag(tag, *, label="checkpoint tag"):
+    """A tag is 1-4 "/"-joined names (see validate_name) -- e.g. "gpt-d12-base" or
+    "kvcache/d13-chat". `label` only changes the wording of a raised error, so the same validator
+    serves checkpoint tags (output_tag/source_tag/model_tag) and any other "/"-joined path segment
+    under <base_dir> that needs the same treatment (e.g. a job's log_dir). Returns tag."""
     if not isinstance(tag, str) or not tag:
-        raise ValueError(f"checkpoint tag must be a non-empty string, got {tag!r}")
-    if tag.startswith("/") or "\\" in tag or "\0" in tag:
-        raise ValueError(f"checkpoint tag {tag!r} must be relative, and use \"/\" (not a backslash) for folders")
-    for segment in tag.split("/"):
-        if segment in ("", ".", ".."):
-            raise ValueError(
-                f"checkpoint tag {tag!r} has an empty, \".\" or \"..\" folder segment -- "
-                f"a tag is text like \"gpt-d12-base\" or \"kvcache/d13-chat\""
-            )
+        raise ValueError(f"{label} must be a non-empty string, got {tag!r}")
+    segments = tag.split("/")
+    if not 1 <= len(segments) <= 4:
+        raise ValueError(f"{label} must have 1-4 \"/\"-separated segments, got {len(segments)} in {tag!r}")
+    for segment in segments:
+        validate_name(segment, label=f"{label} segment")
     return tag
 
 

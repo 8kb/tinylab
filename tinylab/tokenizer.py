@@ -118,7 +118,12 @@ class RustBPETokenizer:
     def get_bos_token_id(self):
         return self.bos_token_id
 
-    def encode(self, text, prepend=None, append=None, num_threads=8):
+    def encode(self, text, prepend=None, append=None, num_threads=None):
+        # One "how many threads" policy, not two that happen to agree only because every real
+        # caller overrides this: os.cpu_count() here, same as tinylab.ops.prepare's own
+        # "tokenizer_threads" default (the only production path that reaches this with a list).
+        if num_threads is None:
+            num_threads = os.cpu_count()
         if prepend is not None:
             prepend_id = prepend if isinstance(prepend, int) else self.encode_special(prepend)
         if append is not None:

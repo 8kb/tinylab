@@ -27,6 +27,7 @@ import torch
 
 from datacore import DatasetMismatch, FileSystemDatasetStore
 from modelcore import OptimizerHparams
+from modelcore import runtime as modelcore_runtime
 from modelcore.kernels.flash_attn import build_doc_args
 from modelcore.optim.schedules import lr_multiplier, muon_momentum
 
@@ -42,7 +43,7 @@ _COMMON_KEYS = {
     "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr", "weight_decay",
     "warmup_steps", "warmdown_ratio", "final_lr_frac", "muon_momentum_warmup_steps",
     "eval_every", "eval_tokens", "save_every",
-    "fp8", "fp8_recipe", "fp8_eval",
+    "fp8", "fp8_eval",
     "doc_masking", "doc_masking_max_docs_per_row",
     "adapter_lr", "adapter_scalar_lr",
 }
@@ -207,6 +208,8 @@ def run(cfg: dict, ctx) -> dict:
     prior_training_time = 0.0
     resume_dataloader_state = None
     resumed_val_bpb = None
+    resumed_min_val_bpb = None
+    resumed_smooth_train_loss = None
     optimizer_state = None
     # A fresh kind="sft" start's own momentum warm-start (from "source_tag"'s optimizer shard) --
     # deliberately a *separate* local from optimizer_state above: optimizer_state's resume-path
@@ -240,8 +243,6 @@ def run(cfg: dict, ctx) -> dict:
                 f"in {checkpoint_dir} -- refusing to resume with a freshly-initialized optimizer."
             )
             real_config = model.config
-            model_stats = manager.stats(real_config)
-            print0(f"[{cfg['name']}] resuming from step {resumed_step}: {model_stats.n_layer} layers, {model_stats.num_params:,} params")
             num_iterations = cfg["num_iterations"] if kind == "base" else cfg.get("num_iterations")
             if num_iterations is None:
                 num_iterations = _one_epoch(dataset, sequence_len, total_batch_size)
@@ -254,6 +255,8 @@ def run(cfg: dict, ctx) -> dict:
             prior_training_time = meta.get("total_training_time", 0.0)
             resume_dataloader_state = meta.get("dataloader_state_dict")
             resumed_val_bpb = meta.get("val_bpb")
+            resumed_min_val_bpb = meta.get("min_val_bpb")
+            resumed_smooth_train_loss = meta.get("smooth_train_loss")
 
     if resumed_step is None:
         if kind == "base":
@@ -262,8 +265,6 @@ def run(cfg: dict, ctx) -> dict:
                 "ModelConfig tree (see nanochat's scripts/model_info.py --dump-config)."
             )
             real_config = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
-            model_stats = manager.stats(real_config)
-            print0(f"Model: {model_stats.n_layer} layers, {model_stats.num_params:,} params ({model_stats.num_scaling_params:,} scaling)")
             num_iterations = cfg["num_iterations"]
 
             model = manager.create_model(real_config, device=device, seed=42)
@@ -325,8 +326,30 @@ def run(cfg: dict, ctx) -> dict:
                 )
                 print0(f"[{cfg['name']}] loaded optimizer state from {cfg['source_tag']!r} (step {base_model_step}, rank {ddp_rank})")
 
+    # One model_stats computation for all three paths (resume / base-fresh / sft-fresh) -- used
+    # both for the diagnostic print below and, further down, as flops_per_token for the MFU
+    # calculation (previously computed ad hoc in only two of the three branches, and never for a
+    # fresh sft start at all).
+    model_stats = manager.stats(real_config)
+    if resumed_step is not None:
+        print0(f"[{cfg['name']}] resuming from step {resumed_step}: {model_stats.n_layer} layers, {model_stats.num_params:,} params")
+    elif kind == "base":
+        print0(f"Model: {model_stats.n_layer} layers, {model_stats.num_params:,} params ({model_stats.num_scaling_params:,} scaling)")
+    else:
+        print0(f"[{cfg['name']}] sft model: {model_stats.n_layer} layers, {model_stats.num_params:,} params")
+
+    # MFU denominator: an unknown/non-CUDA device name makes peak_flops() return inf (MFU reads
+    # 0% rather than a wrong guess) -- see modelcore.runtime.peak_flops's own docstring. This
+    # laptop has no CUDA device at all (see AGENTS.md), so MFU is expected to read 0% here.
+    device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else device.type
+    peak_flops = modelcore_runtime.peak_flops(device_name, log=print0)
+
     if cfg.get("fp8"):
-        fp8_report = manager.enable_fp8(model, recipe=cfg.get("fp8_recipe", "tensorwise"))
+        # No "recipe" choice to plumb through: modelcore only ever implements "tensorwise" (its
+        # own default) -- torchao, which would have supplied the others, was deliberately dropped
+        # (see modelcore/precision/fp8.py's own module docstring). A job-file "fp8_recipe" key
+        # existed only as a forward-compatibility placeholder for a choice that was never real.
+        fp8_report = manager.enable_fp8(model)
         print0(f"[{cfg['name']}] fp8: {fp8_report.num_converted}/{fp8_report.num_linear} Linear converted")
     fp8_eval = cfg.get("fp8_eval", True)
 
@@ -427,7 +450,7 @@ def run(cfg: dict, ctx) -> dict:
         cfg.get("muon_momentum_warmup_steps", 400),
     )
 
-    def _save(step, val_bpb, dataloader_state, elapsed):
+    def _save(step, val_bpb, dataloader_state, elapsed, min_val_bpb, smooth_train_loss):
         # The saved config says which tokenizer it needs (see checkpoints.build_model), and an sft
         # step declares the chat format it trained in -- a base checkpoint keeps whatever template
         # its own model_config named.
@@ -444,6 +467,10 @@ def run(cfg: dict, ctx) -> dict:
             "user_config": {k: v for k, v in cfg.items() if k != "model_config"},
             "device_batch_size": device_batch_size, "max_seq_len": sequence_len, "total_batch_size": total_batch_size,
             "dataloader_state_dict": dataloader_state, "total_training_time": elapsed,
+            # Running best val bpb and an EMA of the per-step train loss, across the whole run
+            # (resume picks both up from the loaded checkpoint's own meta -- see
+            # resumed_min_val_bpb/resumed_smooth_train_loss above -- rather than resetting them).
+            "min_val_bpb": min_val_bpb, "smooth_train_loss": smooth_train_loss,
         }
         if kind == "sft":
             meta_data["base_model_tag"] = base_model_tag
@@ -459,8 +486,13 @@ def run(cfg: dict, ctx) -> dict:
     x, y, dataloader_state = next(train_loader)
 
     val_bpb = resumed_val_bpb
+    min_val_bpb = resumed_min_val_bpb
+    smooth_train_loss = resumed_smooth_train_loss
     start_step = resumed_step or 0
     t_start = time.time()
+    dt = 0.0
+    tokens_per_sec = 0.0
+    mfu = 0.0
     for step in range(start_step, num_iterations + 1):
         last_step = step == num_iterations
         if eval_every > 0 and (last_step or step % eval_every == 0):
@@ -473,7 +505,8 @@ def run(cfg: dict, ctx) -> dict:
                     val_bpb = manager.evaluate_bpb(model, val_loader, eval_steps, token_bytes, **eval_kwargs)
             else:
                 val_bpb = manager.evaluate_bpb(model, val_loader, eval_steps, token_bytes, **eval_kwargs)
-            print0(f"[{cfg['name']}] step {step:05d} | val bpb: {val_bpb:.6f}")
+            min_val_bpb = val_bpb if min_val_bpb is None else min(min_val_bpb, val_bpb)
+            print0(f"[{cfg['name']}] step {step:05d} | val bpb: {val_bpb:.6f} (min {min_val_bpb:.6f})")
             model.train()
         # save: always at the end of the run, or every save_every steps -- but never at step 0
         # (no training has happened yet) and never re-saving the step this run just resumed from
@@ -481,9 +514,10 @@ def run(cfg: dict, ctx) -> dict:
         # completed" (0 at the very start), the same convention the eval check above uses, so no
         # off-by-one between what gets evaluated and what gets saved under the same step number.
         if last_step or (save_every > 0 and step > 0 and step != resumed_step and step % save_every == 0):
-            _save(step, val_bpb, dataloader_state, prior_training_time + (time.time() - t_start))
+            _save(step, val_bpb, dataloader_state, prior_training_time + (time.time() - t_start), min_val_bpb, smooth_train_loss)
         if last_step:
             break
+        step_t0 = time.time()
         step_loss = 0.0  # grad-accum-averaged, not the last micro-batch's raw loss
         for _ in range(grad_accum_steps):
             doc_args = make_doc_args(x)
@@ -496,8 +530,17 @@ def run(cfg: dict, ctx) -> dict:
         manager.apply_schedule(optimizer, lr_mult=lrm, muon_momentum=muon_momentum_value)
         optimizer.step()
         model.zero_grad(set_to_none=True)
+        # A plain EMA (no bias-correction warm-up), seeded from the resumed checkpoint's own value
+        # when there is one, else from this run's very first step's own loss.
+        smooth_train_loss = step_loss if smooth_train_loss is None else 0.9 * smooth_train_loss + 0.1 * step_loss
+        dt = max(time.time() - step_t0, 1e-9)
+        tokens_per_sec = total_batch_size / dt
+        # peak_flops is inf for an unrecognized/non-CUDA device (see modelcore.runtime.peak_flops),
+        # so this divides out to 0.0 rather than raising -- MFU just reads 0% there.
+        mfu = model_stats.flops_per_token * total_batch_size / dt / peak_flops
         if step % 10 == 0:
-            print0(f"[{cfg['name']}] step {step:05d}/{num_iterations} | loss {step_loss:.4f}")
+            print0(f"[{cfg['name']}] step {step:05d}/{num_iterations} | loss {step_loss:.4f} | "
+                   f"dt {dt * 1000:.0f}ms | tok/s {tokens_per_sec:,.0f} | mfu {mfu * 100:.1f}%")
     total_training_time = prior_training_time + (time.time() - t_start)
 
     return {

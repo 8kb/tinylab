@@ -143,7 +143,7 @@ def test_resume_through_job_ignores_a_checkpoint_that_never_finished_saving(base
 
     job_path = str(tmp_path / "job.json")
     with open(job_path, "w", encoding="utf-8") as f:
-        json.dump({"steps": [dict(_base_cfg(sequence_len), num_iterations=9)]}, f)
+        json.dump({"defaults": {"log_dir": "logs"}, "steps": [dict(_base_cfg(sequence_len), num_iterations=9)]}, f)
 
     from modelcore.store import FileSystemStore
     original_write_optimizer_state = FileSystemStore.write_optimizer_state

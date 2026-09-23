@@ -70,10 +70,25 @@ def run(cfg: dict, ctx) -> dict:
     train_time = time.time() - t0
     print0(f"Trained tokenizer in {train_time:.1f}s")
 
+    # Compression stat: chars/token over a bounded sample of the same corpus, encoded with the
+    # tokenizer just trained -- tinylab's own version of nanochat's tok_eval.py compression-ratio
+    # check, minus its GPT-2/GPT-4 reference-tokenizer comparison. A separate, smaller cap than the
+    # training run's own max_chars -- this only measures, it doesn't need the whole corpus.
+    sample_cap = min(max_chars, 5_000_000)
+    sample_docs = list(_text_iterator(train_paths, doc_cap, sample_cap))
+    sample_chars = sum(len(doc) for doc in sample_docs)
+    sample_tokens = sum(len(ids) for ids in tokenizer.encode(sample_docs))
+    chars_per_token = sample_chars / sample_tokens if sample_tokens else None
+    if chars_per_token is not None:
+        print0(f"Compression: {chars_per_token:.3f} chars/token over {sample_chars:,} sampled chars")
+
     tokenizer_dir = resolve_tokenizer_dir(output)
     tokenizer.save(tokenizer_dir)
     token_bytes = torch.tensor(tokenizer.token_byte_lengths(), dtype=torch.int32)
     torch.save(token_bytes, os.path.join(tokenizer_dir, "token_bytes.pt"))
     print0(f"Saved tokenizer to {tokenizer_dir}")
 
-    return {"op": "tokenizer", "output": tokenizer_dir, "vocab_size": tokenizer.get_vocab_size(), "train_time": train_time}
+    return {
+        "op": "tokenizer", "output": tokenizer_dir, "vocab_size": tokenizer.get_vocab_size(),
+        "train_time": train_time, "chars_per_token": chars_per_token,
+    }

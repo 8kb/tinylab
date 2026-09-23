@@ -24,6 +24,14 @@ from contextlib import contextmanager
 from modelcore import ModelManager
 from modelcore.generate import ToolSpec, collect_batch, collect_batch_multi, generate_with_tools
 
+# Shared with tinylab.ops.bench and tinylab.chat, both of which decode through this Engine --
+# one literal each, not two independent copies of the same number (the pattern tinylab.tokenizer's
+# DEFAULT_MAX_TOKENS_PER_CONVERSATION already follows). Engine.generate's own top_k/max_tokens
+# defaults (None -- "no restriction") stay separate: they're this primitive's own default, not a
+# policy choice, and every real caller passes an explicit value anyway.
+DEFAULT_TOP_K = 50
+DEFAULT_MAX_NEW_TOKENS = 256
+
 # -----------------------------------------------------------------------------
 # Calculator tool helpers
 

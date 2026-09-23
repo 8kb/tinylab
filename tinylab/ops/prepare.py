@@ -124,10 +124,29 @@ def _prepare_sft(cfg, ctx, sequence_len, tokenizer):
     return dataset_name, dataset_dir, manifest
 
 
+def _split_summary(split_manifest: dict) -> dict:
+    """Every per-split stat datacore's manifest already computes (writer.SplitTotals, see
+    datacore/docs/architecture.md), not just the num_sequences/num_tokens this used to cherry-pick
+    -- num_documents_dropped/num_tokens_dropped (packing loss) were sitting on disk unreported.
+    Adds chars_per_token, derived from num_chars_encoded (0 for a TokenSource split, e.g. SFT
+    conversation rendering, which never has raw text pass through datacore -- chars_per_token is
+    omitted rather than reported as a fake 0.0 in that case)."""
+    num_chars = split_manifest.get("num_chars_encoded", 0)
+    num_tokens_encoded = split_manifest["num_tokens_encoded"]
+    summary = {
+        "num_sequences": split_manifest["num_sequences"], "num_tokens": split_manifest["num_tokens"],
+        "num_documents": split_manifest["num_documents"], "num_documents_dropped": split_manifest["num_documents_dropped"],
+        "num_tokens_encoded": num_tokens_encoded, "num_tokens_dropped": split_manifest["num_tokens_dropped"],
+    }
+    if num_chars > 0 and num_tokens_encoded > 0:
+        summary["chars_per_token"] = num_chars / num_tokens_encoded
+    return summary
+
+
 def run(cfg: dict, ctx) -> dict:
     """Runs one prepare step: cfg is a resolved job-file step (see docs/job-file.md for every
     key), ctx the shared Context for this job run. Returns {"op": "prepare", "kind", "dataset",
-    "dataset_dir", "splits": {"train"|"val": {"num_sequences", "num_tokens"}}}."""
+    "dataset_dir", "splits": {"train"|"val": _split_summary(...)}}."""
     assert "kind" in cfg, "prepare: 'kind' is required ('base' or 'sft')"
     kind = cfg["kind"]
     assert kind in ("base", "sft"), f"prepare: kind must be 'base' or 'sft', got {kind!r}"
@@ -141,8 +160,9 @@ def run(cfg: dict, ctx) -> dict:
         dataset_name, dataset_dir, manifest = _prepare_base(cfg, ctx, sequence_len, tokenizer)
     else:
         dataset_name, dataset_dir, manifest = _prepare_sft(cfg, ctx, sequence_len, tokenizer)
-    return {
-        "op": "prepare", "kind": kind, "dataset": dataset_name, "dataset_dir": dataset_dir,
-        "splits": {split: {"num_sequences": s["num_sequences"], "num_tokens": s["num_tokens"]}
-                   for split, s in manifest["splits"].items()},
-    }
+    splits = {split: _split_summary(s) for split, s in manifest["splits"].items()}
+    for split, s in splits.items():
+        ratio = f" | {s['chars_per_token']:.3f} chars/token" if "chars_per_token" in s else ""
+        print0(f"  {split}: {s['num_sequences']:,} sequences, {s['num_tokens']:,} tokens "
+               f"({s['num_documents_dropped']:,} docs / {s['num_tokens_dropped']:,} tokens dropped){ratio}")
+    return {"op": "prepare", "kind": kind, "dataset": dataset_name, "dataset_dir": dataset_dir, "splits": splits}

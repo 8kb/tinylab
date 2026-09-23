@@ -5,7 +5,7 @@ into one op selected by "suite" instead of two scripts -- see docs/architecture.
 Model/Generator adapter split, docs/job-file.md for every cfg key this module reads.
 """
 from tinylab import checkpoints
-from tinylab.engine import Engine
+from tinylab.engine import DEFAULT_MAX_NEW_TOKENS, DEFAULT_TOP_K, Engine
 from tinylab.runtime import get_base_dir, print0
 
 # Keys shared by both suites, plus each suite's own -- see accepted_keys() below, which is
@@ -63,8 +63,8 @@ def _run_chat(cfg, ctx, model, tokenizer):
     generator = Engine(model, tokenizer, manager=ctx.model_manager)
     report = ctx.bench_manager.chat_suite(
         tasks, model, tokenizer, generator=generator, batch_size=cfg.get("batch_size", 1),
-        num_samples=cfg.get("num_samples", 1), max_new_tokens=cfg.get("max_new_tokens", 256),
-        temperature=cfg.get("temperature", 0.0), top_k=cfg.get("top_k", 50), max_problems=cfg.get("max_problems"),
+        num_samples=cfg.get("num_samples", 1), max_new_tokens=cfg.get("max_new_tokens", DEFAULT_MAX_NEW_TOKENS),
+        temperature=cfg.get("temperature", 0.0), top_k=cfg.get("top_k", DEFAULT_TOP_K), max_problems=cfg.get("max_problems"),
         generative_batch_size=cfg.get("generative_batch_size", 1), eval_workers=cfg.get("eval_workers", 1),
         device=ctx.device, rank=ctx.rank, world_size=ctx.world_size,
     )

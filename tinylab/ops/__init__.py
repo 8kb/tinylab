@@ -144,7 +144,12 @@ class Context:
 # their OWN step's "tokenizer" key via ctx.tokenizer_for(cfg.get("tokenizer")), falling back to the
 # run default only when a step doesn't set one. A job training two differently-vocabbed models sets
 # "tokenizer" per relevant step rather than in "defaults" -- see docs/job-file.md.
-COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer"}
+#
+# "log_dir" is one-per-run like "device", but has no code-level default at all -- job.run_file
+# requires it (a JobError if missing, checked once it's actually needed, not here) rather than
+# guessing a location under base_dir for a log file nobody asked for. See docs/job-file.md and
+# tinylab.checkpoints.validate_tag for its "1-4 names" format.
+COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer", "log_dir"}
 
 
 from tinylab.ops import prepare, train, bench, tokenizer  # noqa: E402 -- after Context, to avoid a cycle

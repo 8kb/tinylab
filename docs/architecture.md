@@ -171,9 +171,16 @@ with a compatible tokenizer.
   checkpoints/<tag>/         model_<step>.pt, meta_<step>.json (its own "model_config" key holds
                              the tree -- there is no separate config_<step>.json file),
                              optim_<step>_rank<r>.pt; multiple steps coexist with no pruning.
-                             <tag> is arbitrary text and may contain "/" folders
+                             <tag> is 1-4 "/"-joined names, each 1-16 chars from [A-Za-z0-9_-]
                              ("gpt-d12-base", "kvcache/d13-chat")
   job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
+  <log_dir>/                 a job's required "log_dir" key (same 1-4-names format as a tag, no
+                             built-in default -- see docs/job-file.md): <job_name>.log (the whole
+                             run's general log -- start/finish, each step's own header/result, a
+                             top-level failure, the final job-state dump) plus one
+                             <job_name>-<step_name>.log per executed step (that step's own console
+                             output, nothing else). <job_name> is the job file's own basename, no
+                             directory or extension.
 ```
 
 ### Checkpoint tags: one namespace, the tag is the address
@@ -260,7 +267,9 @@ assert and fingerprint check then catch a wrong *selection*.
 `tinylab.tokenizer.render_conversation` renders), a base one keeps whatever its `model_config` said.
 Declarative only for now — modelcore validates it is a known template and nothing else reads it.
 
-`meta_<step>.json` carries: `step`, `val_bpb`, `tokenizer_fingerprint`, `model_config` (the
+`meta_<step>.json` carries: `step`, `val_bpb`, `min_val_bpb` (the run's best `val_bpb` so far, across
+resumes), `smooth_train_loss` (an EMA of the per-step train loss, across resumes),
+`tokenizer_fingerprint`, `model_config` (the
 materialized tree this checkpoint was built from), `user_config` (the resolved job-file step, minus
 `"model_config"` — that would just duplicate the sibling `model_config` key under a different,
 unresolved shape), `device_batch_size`, `max_seq_len`, `total_batch_size`, `dataloader_state_dict`

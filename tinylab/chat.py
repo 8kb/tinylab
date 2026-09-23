@@ -11,7 +11,7 @@ and the scored path exercise identical decoding code.
 import os
 
 from tinylab import checkpoints, job
-from tinylab.engine import Engine
+from tinylab.engine import DEFAULT_MAX_NEW_TOKENS, DEFAULT_TOP_K, Engine
 from tinylab.ops import COMMON_KEYS, Context
 from tinylab.runtime import compute_cleanup, print0
 
@@ -33,8 +33,8 @@ def main(job_path: str):
     engine = Engine(model, tokenizer, manager=ctx.model_manager)
 
     temperature = cfg.get("temperature", 0.6)
-    top_k = cfg.get("top_k", 50)
-    max_tokens = cfg.get("max_tokens", 256)
+    top_k = cfg.get("top_k", DEFAULT_TOP_K)
+    max_tokens = cfg.get("max_tokens", DEFAULT_MAX_NEW_TOKENS)
 
     bos = tokenizer.get_bos_token_id()
     user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
