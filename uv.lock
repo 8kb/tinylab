@@ -36,8 +36,8 @@ wheels = [
 
 [[package]]
 name = "benchcore"
-version = "0.3.1"
-source = { git = "https://github.com/8kb/benchcore?tag=v0.3.1#a637f97dcdf5329ea85236984bfb15b0a01e8892" }
+version = "0.4.0"
+source = { git = "https://github.com/8kb/benchcore?tag=v0.4.0#219a4c01930126bc98b868a48d333963a62d87f3" }
 dependencies = [
     { name = "datacore", extra = ["parquet"] },
     { name = "filelock" },
@@ -1429,7 +1429,7 @@ wheels = [
 
 [[package]]
 name = "tinylab"
-version = "0.6.0"
+version = "0.7.0"
 source = { virtual = "." }
 dependencies = [
     { name = "benchcore", extra = ["bundle"] },
@@ -1460,7 +1460,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.3.1" },
+    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.4.0" },
     { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.4.0" },
     { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.7.1" },
     { name = "rustbpe", specifier = ">=0.1.0" },

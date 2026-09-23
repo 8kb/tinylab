@@ -39,7 +39,7 @@ def _run_core(cfg, ctx, model, tokenizer):
     examples per task if given (must leave enough for each task's own few-shot count -- see
     AGENTS.md). Returns {"op": "bench", "suite": "core", "core_metric", "results"}."""
     report = ctx.bench_manager.core_suite(model, tokenizer, cache_dir=get_base_dir(), max_per_task=cfg.get("max_per_task"),
-                                           device=ctx.device, rank=ctx.rank, world_size=ctx.world_size)
+                                           device=ctx.device, rank=ctx.rank, world_size=ctx.world_size, log=print0)
     for label, acc in report.results.items():
         print0(f"  {label:30s} acc={acc:.4f}  centered={report.centered_results[label]:.4f}")
     print0(f"CORE metric: {report.core_metric:.4f}")
@@ -66,7 +66,7 @@ def _run_chat(cfg, ctx, model, tokenizer):
         num_samples=cfg.get("num_samples", 1), max_new_tokens=cfg.get("max_new_tokens", DEFAULT_MAX_NEW_TOKENS),
         temperature=cfg.get("temperature", 0.0), top_k=cfg.get("top_k", DEFAULT_TOP_K), max_problems=cfg.get("max_problems"),
         generative_batch_size=cfg.get("generative_batch_size", 1), eval_workers=cfg.get("eval_workers", 1),
-        device=ctx.device, rank=ctx.rank, world_size=ctx.world_size,
+        device=ctx.device, rank=ctx.rank, world_size=ctx.world_size, log=print0,
     )
     for name, acc in report.results.items():
         print0(f"  {name:15s} acc={acc:.4f}")
