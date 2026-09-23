@@ -47,7 +47,10 @@ _COMMON_KEYS = {
     "adapter_lr", "adapter_scalar_lr",
 }
 _BASE_KEYS = set()
-_SFT_KEYS = {"source_tag", "source_step"}
+# init_lr_frac/load_optimizer are sft-only, deliberately: neither exists in nanochat's
+# scripts/base_train.py either (they're chat_sft.py-only args), and accepted_keys is kind-aware,
+# so either key on a kind="base" step is a startup error instead of a silently-ignored one.
+_SFT_KEYS = {"source_tag", "source_step", "init_lr_frac", "load_optimizer"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -205,6 +208,11 @@ def run(cfg: dict, ctx) -> dict:
     resume_dataloader_state = None
     resumed_val_bpb = None
     optimizer_state = None
+    # A fresh kind="sft" start's own momentum warm-start (from "source_tag"'s optimizer shard) --
+    # deliberately a *separate* local from optimizer_state above: optimizer_state's resume-path
+    # load must stay a bit-exact restore (no LR rescale), while this one is followed by an
+    # LR-reset + init_lr_frac rescale below. Conflating the two would silently corrupt resume.
+    warm_start_optimizer_state = None
     if ctx.resume:
         # A job-state-file-confirmed step (only ever recorded right after that checkpoint's own
         # save fully returned -- see ctx.record_checkpoint below) is trusted first: a directory
@@ -279,6 +287,44 @@ def run(cfg: dict, ctx) -> dict:
             base_model_tag = meta.get("model_tag")
             base_model_step = meta.get("step")
 
+            # Optimizer momentum warm-start (default on, nanochat's chat_sft.py --load-optimizer):
+            # load source_tag's own optimizer shard for this rank -- kept as a separate
+            # warm_start_optimizer_state local (see its declaration above), consumed after the
+            # optimizer below is built, then LR-reset by the init_lr_frac block right after that.
+            load_optimizer = cfg.get("load_optimizer", True)
+            if load_optimizer and real_config.adapters:
+                # The pretrained optimizer's param groups were built for a fully-trainable base
+                # model; an adapter-augmented model's groups are shaped differently (a frozen
+                # base produces no "matrix"/"embedding"/... groups at all, plus new "adapter"/
+                # "adapter_scalar" roles -- see modelcore.roles.build_param_groups). Loading the
+                # shard here would apply momentum state to the wrong parameters entirely, not
+                # just stale ones (nanochat's own comment at chat_sft.py's equivalent check).
+                assert "load_optimizer" not in cfg, (
+                    f"train: sft step {cfg['name']!r} has adapters and an explicit "
+                    f"\"load_optimizer\": true -- the pretrained optimizer's param-group layout "
+                    f"does not match an adapter-augmented model. Omit \"load_optimizer\" "
+                    f"(adapters force the warm-start off)."
+                )
+                print0(f"[{cfg['name']}] adapters active: skipping optimizer warm-start")
+            elif load_optimizer:
+                saved_world_size = meta.get("user_config", {}).get("world_size")
+                assert saved_world_size == ddp_world_size, (
+                    f"train: sft step {cfg['name']!r} warm-start (\"load_optimizer\") found "
+                    f"source_tag={cfg['source_tag']!r} saved at world_size={saved_world_size}, "
+                    f"but this run was launched with {ddp_world_size} -- MuonAdamW's optimizer "
+                    f"state doesn't reshard across world_size (see TODO.md). Relaunch at the "
+                    f"original world_size, or set \"load_optimizer\": false to start sft with a "
+                    f"fresh optimizer instead."
+                )
+                warm_start_optimizer_state = checkpoints.load_optimizer_state(cfg["source_tag"], base_model_step, device, ddp_rank)
+                assert warm_start_optimizer_state is not None, (
+                    f"train: sft step {cfg['name']!r} warm-start (\"load_optimizer\") found no "
+                    f"optimizer state for source_tag={cfg['source_tag']!r} step {base_model_step} "
+                    f"rank {ddp_rank} -- refusing to warm-start with a missing shard. Set "
+                    f"\"load_optimizer\": false to start sft with a fresh optimizer instead."
+                )
+                print0(f"[{cfg['name']}] loaded optimizer state from {cfg['source_tag']!r} (step {base_model_step}, rank {ddp_rank})")
+
     if cfg.get("fp8"):
         fp8_report = manager.enable_fp8(model, recipe=cfg.get("fp8_recipe", "tensorwise"))
         print0(f"[{cfg['name']}] fp8: {fp8_report.num_converted}/{fp8_report.num_linear} Linear converted")
@@ -303,7 +349,15 @@ def run(cfg: dict, ctx) -> dict:
     model = torch.compile(model, dynamic=False)
 
     optimizer_hparams_kwargs = dict(
-        unembedding_lr=cfg.get("unembedding_lr", 0.008 if kind == "base" else 0.004),
+        # 0.008 for both kinds -- nanochat's chat_sft.py inherits this value from the pretrain
+        # checkpoint's own user_config (base_train.py's own default), it doesn't have a separate
+        # sft literal of its own. tinylab has no "inherit a hyperparameter from a checkpoint"
+        # mechanism (a job file names every value it wants -- see this module's own docstring), so
+        # the fix is to this literal matching what nanochat actually trains at, not to add
+        # inheritance. Was 0.004 (half nanochat's effective sft value) until experiment 01
+        # (ffn-width-vs-heads) surfaced this while diagnosing the sft init_lr_frac/optimizer-
+        # warm-start gap below -- see that experiment's README "Incidents and lessons".
+        unembedding_lr=cfg.get("unembedding_lr", 0.008),
         embedding_lr=cfg.get("embedding_lr", 0.3),
         scalar_lr=cfg.get("scalar_lr", 0.5),
         matrix_lr=cfg.get("matrix_lr", 0.02),
@@ -315,7 +369,35 @@ def run(cfg: dict, ctx) -> dict:
         optimizer_hparams_kwargs["adapter_scalar_lr"] = cfg["adapter_scalar_lr"]
     optimizer = manager.create_optimizer(orig_model, OptimizerHparams(**optimizer_hparams_kwargs))
     if optimizer_state is not None:
+        # A true step-resume (ctx.resume, this step's own prior checkpoint): restore exactly, no
+        # LR games -- this must reproduce bit-for-bit what the interrupted run had (see
+        # test_resume.py's own "bit-exactly" test). The sft momentum warm-start below is a
+        # different thing (a *different* source checkpoint's optimizer, LRs deliberately reset
+        # after), which is exactly why it lives in warm_start_optimizer_state, a separate local.
         optimizer.load_state_dict(optimizer_state)
+    else:
+        if warm_start_optimizer_state is not None:
+            # sft momentum warm-start (see the "load_optimizer" block above): load_state_dict
+            # overwrites every group's own "lr"/"initial_lr" with the SOURCE run's own saved
+            # (warmed-down) values -- capture this run's freshly-computed LRs first and restore
+            # them right after, so only the momentum/exp_avg buffers actually carry over. Matches
+            # nanochat's chat_sft.py:216-226 exactly, including its own ordering and comment.
+            base_lrs = [g["lr"] for g in optimizer.param_groups]
+            optimizer.load_state_dict(warm_start_optimizer_state)
+            for g, base_lr in zip(optimizer.param_groups, base_lrs):
+                g["lr"] = base_lr
+        # init_lr_frac (sft only -- nanochat's chat_sft.py --init-lr-frac, default 0.8): scales
+        # the starting sft LR down from the (possibly just-warm-started-then-reset) base LR
+        # above. Only on a genuine fresh start, in this "else" -- never on a resumed step, which
+        # must reproduce exactly what the interrupted run had (the branch above). A no-op
+        # multiplier for kind="base" (this key isn't even accepted there -- see _BASE_KEYS).
+        # The "initial_lr" write is load-bearing beyond the rescale: ModelManager.apply_schedule
+        # computes every step's LR as group["initial_lr"] * lr_mult, and load_state_dict above
+        # would otherwise have left it at the source run's own value.
+        init_lr_frac = cfg.get("init_lr_frac", 0.8) if kind == "sft" else 1.0
+        for g in optimizer.param_groups:
+            g["lr"] *= init_lr_frac
+            g["initial_lr"] = g["lr"]
 
     tokens_per_fwdbwd = device_batch_size * sequence_len * ddp_world_size
     assert total_batch_size % tokens_per_fwdbwd == 0, f"total_batch_size ({total_batch_size}) must be a multiple of {tokens_per_fwdbwd}"

@@ -81,7 +81,7 @@ AGENTS.md.
 | `device_batch_size` | Micro-batch size per device, per forward/backward. | `4` | both |
 | `total_batch_size` | Tokens per optimizer step, across grad-accum and all ranks; must be a multiple of `device_batch_size * sequence_len * world_size`. | required | both |
 | `embedding_lr` | Embedding-table learning rate. | `0.3` | both |
-| `unembedding_lr` | Unembedding (LM head) learning rate. | `0.008` (base) / `0.004` (sft) | both |
+| `unembedding_lr` | Unembedding (LM head) learning rate. | `0.008` | both |
 | `matrix_lr` | Muon (matrix-parameter) learning rate. | `0.02` | both |
 | `scalar_lr` | Scalar-parameter learning rate. | `0.5` | both |
 | `weight_decay` | AdamW weight decay, used verbatim (no batch-size rescale). | `0.28` (base) / `0.0` (sft) | both |
@@ -101,6 +101,8 @@ AGENTS.md.
 | `adapter_scalar_lr` | Learning rate for DoRA's per-channel magnitude param. | `modelcore.OptimizerHparams.adapter_scalar_lr` | both |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |
+| `init_lr_frac` | Starting sft LR as a fraction of the (possibly warm-started) base LR — nanochat's `chat_sft.py --init-lr-frac`. | `0.8` | sft |
+| `load_optimizer` | Warm-start the optimizer from `source_tag`'s own checkpoint (Muon/Adam momentum buffers only — LRs are reset to this step's own, then scaled by `init_lr_frac`). Forced off (and an explicit `true` is an error) when the step's model carries `adapters` — the pretrained optimizer's param-group layout doesn't match an adapter-augmented model. | `true` | sft |
 
 ## `tokenizer`
 

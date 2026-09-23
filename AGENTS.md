@@ -132,17 +132,20 @@ anywhere.)
   the tag (`gpt-d12-base` / `gpt-d12-chat`).
 - **A `kind: sft` checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
   Declarative only until modelcore validates templates against the tokenizer's special tokens.
-- **`train` only ever warm-starts an optimizer from its *own* prior checkpoint (`--resume`), never
-  from a different one.** An `sft` step always builds a fresh optimizer for its `source_tag`
-  base's weights (`ModelManager.create_optimizer`), unlike nanochat's `chat_sft.py
-  --load-optimizer`. This is why attaching an adapter via a `kind: sft` step's `"model_config"`
-  override needs no matching guard here: nanochat forces `--load-optimizer` off for `--adapters`
-  because a frozen base's param groups are shaped completely differently from a fully-trainable
-  one, and loading a pretrained optimizer shard into that layout would corrupt momentum state — a
-  failure mode that can't occur for a fresh `sft` start, since there's no warm-start from a
-  *different* checkpoint to begin with. Resume is a different case entirely: it reloads a step's
-  own optimizer state (built from the same, unchanged config) onto the same freshly-`create_optimizer`'d
-  structure — always a shape match, or `optimizer.load_state_dict` raises loudly.
+- **A fresh `kind: sft` step warm-starts its optimizer from `source_tag`'s own checkpoint by
+  default** (`"load_optimizer"`, default `true`) — momentum/`exp_avg` buffers only, LRs reset
+  right after (`load_state_dict` overwrites a group's whole metadata), then scaled by
+  `"init_lr_frac"` (default `0.8`). Ported from nanochat's `chat_sft.py --load-optimizer`/
+  `--init-lr-frac`; see docs/architecture.md's "sft's optimizer" for the full mechanics and why
+  it's two separate locals (`warm_start_optimizer_state` vs. the resume path's own
+  `optimizer_state`) rather than one. An adapter-augmented `kind: sft` step (via `"model_config"`
+  override) forces the warm-start off and refuses an explicit `"load_optimizer": true` — a frozen
+  base's param groups are shaped completely differently from the source checkpoint's fully-
+  trainable ones (`modelcore.roles.build_param_groups`), and loading a pretrained optimizer shard
+  into that layout would corrupt momentum state. Resume (`--resume`, continuing *this step's own*
+  prior checkpoint, not `source_tag`) is a different case entirely and is untouched by any of
+  this: it reloads a step's own saved optimizer state exactly, with neither the warm-start nor the
+  `init_lr_frac` rescale re-applied.
 - **A `train` step's `"world_size"` is checked against the actual launch, not derived from it —
   twice.** The job file fixes the GPU count a run assumes (`total_batch_size`/grad-accum arithmetic
   depends on it); a mismatched `torchrun --nproc_per_node` is a hard error, not a silently

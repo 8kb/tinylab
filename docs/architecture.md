@@ -191,6 +191,41 @@ directories (nanochat's convention reuses `d12` for both). They can't now, so an
 `output_tag` equals its own `source_tag` is refused outright, rather than reading its starting weights
 from, and writing its result into, the same directory.
 
+### sft's optimizer: `init_lr_frac` and `load_optimizer` (momentum warm-start)
+
+Ported from `nanochat/scripts/chat_sft.py`'s `--init-lr-frac`/`--load-optimizer`, both **sft-only**
+job-file keys (`_SFT_KEYS`, not accepted on `kind: base`). A fresh `kind: sft` step:
+
+1. Builds a normal, cold optimizer from this step's own `OptimizerHparams` (same as `base`).
+2. `load_optimizer` (default `true`): loads `source_tag`'s own last-saved optimizer shard for this
+   rank via `checkpoints.load_optimizer_state`, then immediately restores every param group's `lr`
+   back to what step 1 computed — `load_state_dict` overwrites a group's whole metadata dict
+   (`lr`, `initial_lr`, ...), and only the momentum/`exp_avg` buffers are meant to carry over, not
+   the source run's own (usually warmed-down-to-near-zero) LRs. Skipped, with a printed reason,
+   when the model has `adapters`: an adapter-augmented model's param groups are shaped completely
+   differently from the base checkpoint's (`modelcore.roles.build_param_groups`), so the shard
+   would apply momentum state to the wrong parameters. A world_size mismatch or a missing shard is
+   a hard error (same stance as the resume path's own optimizer checks) — set `load_optimizer:
+   false` to start with a fresh optimizer instead.
+3. `init_lr_frac` (default `0.8`): scales every group's now-current `lr` down by this fraction and
+   restates `initial_lr` to match — load-bearing beyond the sft case, since `ModelManager.
+   apply_schedule` computes every step's LR as `group["initial_lr"] * lr_mult`.
+
+Both steps happen only on a **genuine fresh start** — a resumed step (`ctx.resume` finding this
+step's own prior checkpoint) restores its optimizer state exactly as saved, with neither the
+warm-start nor the rescale re-applied; conflating the two would silently rescale an already-scaled
+LR on every resume. This is why the code carries the source-tag warm-start and the resumed-step
+restore as two separate locals (`warm_start_optimizer_state` vs `optimizer_state`) even though both
+eventually reach the same `optimizer.load_state_dict` call site.
+
+What's deliberately **not** ported: nanochat's hyperparameter *inheritance* (`chat_sft.py` reads
+`embedding_lr`/`unembedding_lr`/`matrix_lr` back out of the pretrain checkpoint's own
+`user_config` when the CLI doesn't override them). tinylab has no "inherit a value from a
+checkpoint" mechanism anywhere else (a job file names every value it wants — see this module's own
+docstring), so `unembedding_lr`'s sft default is a literal `0.008`, matching what nanochat's
+inheritance actually resolves to for a checkpoint pretrained with `base_train.py`'s own default,
+not a new inheritance rule.
+
 ### Several tokenizers
 
 A job's `"tokenizer"` (a `COMMON_KEYS` entry) is a bare name — `<base_dir>/tokenizers/<name>/` —

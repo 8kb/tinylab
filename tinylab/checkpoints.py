@@ -133,3 +133,16 @@ def load_model(model_tag, device, phase, step=None, config_override=None, tokeni
                                               tokenizer_spec=tokenizer_spec)
     meta_data["model_tag"] = model_tag
     return model, tokenizer, meta_data
+
+
+def load_optimizer_state(model_tag, step, device, rank):
+    """This rank's optimizer shard from another tag's checkpoint, without re-loading its model --
+    what a kind="sft" step's momentum warm-start (tinylab.ops.train) needs from its own
+    "source_tag". Mirrors nanochat's checkpoint_manager.load_optimizer_state, minus the
+    base/sft/rl directory-name mapping tinylab's flat tag namespace doesn't have -- resolve_
+    checkpoint_dir(model_tag) is already the whole address. Returns None if this shard was never
+    saved (e.g. an older checkpoint, or optimizer state genuinely absent) -- the caller decides
+    whether that's fatal."""
+    checkpoint_dir = resolve_checkpoint_dir(model_tag)
+    store = FileSystemStore(checkpoint_dir, step)
+    return store.read_optimizer_state(rank=rank, map_location=device)

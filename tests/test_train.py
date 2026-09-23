@@ -5,7 +5,14 @@ re-export) lives only in modelcore.scaling, for nanochat's own use; every number
 produce is now a required tinylab job-file key instead. See AGENTS.md."""
 import pytest
 
-from tinylab.ops.train import _lr_schedule
+from tinylab.ops.train import _lr_schedule, accepted_keys
+
+
+def test_init_lr_frac_and_load_optimizer_are_sft_only():
+    """Neither exists in nanochat's scripts/base_train.py either (chat_sft.py-only args) -- on a
+    kind="base" step they must be a startup error, not a silently-ignored key."""
+    assert {"init_lr_frac", "load_optimizer"} <= accepted_keys({"kind": "sft"})
+    assert not {"init_lr_frac", "load_optimizer"} & accepted_keys({"kind": "base"})
 
 
 def test_lr_multiplier_ramps_up_during_warmup_and_holds_at_one():

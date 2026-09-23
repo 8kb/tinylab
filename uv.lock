@@ -1429,7 +1429,7 @@ wheels = [
 
 [[package]]
 name = "tinylab"
-version = "0.3.0"
+version = "0.5.0"
 source = { virtual = "." }
 dependencies = [
     { name = "benchcore", extra = ["bundle"] },
