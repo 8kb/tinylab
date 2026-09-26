@@ -12,6 +12,8 @@ checkout of the whole family; `llmllab` has no public remote yet, so they won't 
 reading this on GitHub — the modelcore/datacore/benchcore links are real GitHub URLs and work
 anywhere.)
 
+All code, comments, docs, commit messages, and any other text committed to git MUST be in English.
+
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
 `[tool.uv.sources]`: `modelcore` `v0.5.0` (`modelcore.v2` configs), `datacore` `v0.3.0`, `benchcore`
 `v0.2.1`.
