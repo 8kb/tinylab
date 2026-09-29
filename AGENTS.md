@@ -158,6 +158,19 @@ All code, comments, docs, commit messages, and any other text committed to git M
   with fresh momentum. Edit the job file (or relaunch at the original `world_size`) when the GPU
   configuration changes.
 
+- **The bucket (`"remote"`) is a cache-of-record, not a second source of truth to improvise on** —
+  see [`docs/remote.md`](docs/remote.md). Invariants that will bite: (1) a marker (`meta_<step>.json`,
+  `manifest.json`, `tokenizer.pkl`) is always uploaded **last**, and withheld if an earlier upload of
+  that entity failed — never reorder it, never add a code path that uploads one first; (2) a complete
+  upload is **immutable** and the bucket is not versioned, so nothing here may overwrite or delete
+  outside retention (`push_model`/`push_optim`) or an explicit `remote rm` — there is no
+  `sync --delete`, and `--force` is CLI-only, never a job-file key; (3) an upload failure must not kill
+  a training run — it goes to `Uploader.flush()`; (4) `experiment` replaced `log_dir`: logs live under
+  `<base_dir>/experiments/<experiment>/logs/`; (5) a README's frontmatter and History are code-owned,
+  every other section is human-owned (`tinylab.readme`); (6) code that adds anything to the bucket
+  must go through `tinylab.remote` so `NEVER_SYNC_GLOBS` (raw data, `job_state/`, `*.tmp*`) applies.
+  `tests/test_remote*.py` run against `MemoryRemote`, never the network.
+
 ## Testing
 
 ```bash

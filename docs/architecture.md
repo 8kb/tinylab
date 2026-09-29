@@ -13,6 +13,10 @@ tinylab/
   modelconfig.py          loads + validates a materialized modelcore.ModelConfig tree (no
                           preset/depth-dial derivation -- that's nanochat's job, see below)
   checkpoints.py         checkpoint tag/step naming over modelcore's FileSystemStore
+  remote.py              the HF bucket: Remote/Uploader/Prefetcher, push/pull rules (docs/remote.md)
+  remote_stores.py       datacore DatasetStore wrappers that upload / stream shards
+  remote_cli.py          `python -m tinylab remote ls|pull|push|check|rm|push-docs`
+  readme.py              the per-entity README.md format (code-owned frontmatter + History)
   engine.py               KV-cached generation + calculator tool use
   chat.py                 the `chat` CLI command
   data.py                 corpus identity: ClimbMix shard URLs, SmolTalk
@@ -174,13 +178,15 @@ with a compatible tokenizer.
                              <tag> is 1-4 "/"-joined names, each 1-16 chars from [A-Za-z0-9_-]
                              ("gpt-d12-base", "kvcache/d13-chat")
   job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
-  <log_dir>/                 a job's required "log_dir" key (same 1-4-names format as a tag, no
-                             built-in default -- see docs/job-file.md): <job_name>.log (the whole
-                             run's general log -- start/finish, each step's own header/result, a
-                             top-level failure, the final job-state dump) plus one
-                             <job_name>-<step_name>.log per executed step (that step's own console
-                             output, nothing else). <job_name> is the job file's own basename, no
-                             directory or extension.
+  experiments/<experiment>/  a job's required "experiment" key (1-64 chars from [A-Za-z0-9_-], the
+                             name of the experiment card's folder in git, or "scratch"; no built-in
+                             default -- see docs/job-file.md). logs/<job_name>.log is the whole
+                             run's general log (start/finish, each step's own header/result, a
+                             top-level failure, the final job-state dump); logs/<job_name>-
+                             <step_name>.log is one executed step's own console output, nothing
+                             else. <job_name> is the job file's own basename, no directory or
+                             extension. With a "remote" set, jobs/, configs/ and results/ siblings
+                             hold snapshots and step results -- see docs/remote.md.
 ```
 
 ### Checkpoint tags: one namespace, the tag is the address

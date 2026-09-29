@@ -16,10 +16,12 @@ import difflib
 import hashlib
 import json
 import os
+import shutil
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 
-from tinylab.checkpoints import validate_name, validate_tag
+from tinylab.checkpoints import validate_experiment, validate_name, validate_tag
 from tinylab.ops import COMMON_KEYS, OPS
 
 
@@ -104,19 +106,24 @@ def _resolve_tokenizer_specs(step: dict, job_dir: str, *, where: str):
 
 
 def _check_tag_shaped_keys(step: dict, *, where: str):
-    """A tag (checkpoint or "log_dir") is 1-4 "/"-joined names (see tinylab.checkpoints.
-    validate_tag) -- checked here so a bad one is a JobError up front, not a ValueError after a
-    prepare step has already spent an hour (or, for "log_dir", after a run has already logged
-    somewhere). A train step with no explicit "output_tag" uses its own "name" as the tag instead,
+    """A checkpoint tag is 1-4 "/"-joined names (see tinylab.checkpoints.validate_tag) -- checked
+    here so a bad one is a JobError up front, not a ValueError after a prepare step has already
+    spent an hour. "experiment" is checked the same way but with its own, longer single-name rule
+    (see tinylab.checkpoints.validate_experiment). A train step with no explicit "output_tag" uses its own "name" as the tag instead,
     but that needs no separate check here: every step's "name" is already validated as a single
     valid name (resolve_steps's own loop, before this function ever runs), which is by
     construction also a valid 1-segment tag."""
-    for key in ("output_tag", "source_tag", "model_tag", "log_dir"):
+    for key in ("output_tag", "source_tag", "model_tag"):
         if key in step:
             try:
                 validate_tag(step[key], label=key)
             except ValueError as e:
                 raise JobError(f"{where}, {key!r}: {e}") from None
+    if "experiment" in step:
+        try:
+            validate_experiment(step["experiment"])
+        except ValueError as e:
+            raise JobError(f"{where}, 'experiment': {e}") from None
 
 
 def resolve_steps(job: dict, only: str | None = None, *, job_dir: str = "") -> list[dict]:
@@ -200,23 +207,23 @@ def _state_path(job_path: str) -> str:
     return os.path.join(state_dir, f"{stem}-{digest}.json")
 
 
-def _log_dir_path(log_dir: str) -> str:
-    from tinylab.runtime import get_base_dir
-    return os.path.join(get_base_dir(), log_dir)
+def _log_dir_path(experiment: str) -> str:
+    from tinylab.runtime import experiment_dir
+    return os.path.join(experiment_dir(experiment), "logs")
 
 
-def _general_log_path(job_path: str, log_dir: str) -> str:
-    """<base_dir>/<log_dir>/<job_name>.log -- everything not specific to one step (run start/
-    finish, a step's own start header and result, the final job-state dump, a top-level failure).
-    See job.run_file's own docstring."""
-    return os.path.join(_log_dir_path(log_dir), f"{_job_stem(job_path)}.log")
+def _general_log_path(job_path: str, experiment: str) -> str:
+    """<base_dir>/experiments/<experiment>/logs/<job_name>.log -- everything not specific to one
+    step (run start/finish, a step's own start header and result, the final job-state dump, a
+    top-level failure). See job.run_file's own docstring."""
+    return os.path.join(_log_dir_path(experiment), f"{_job_stem(job_path)}.log")
 
 
-def _step_log_path(job_path: str, log_dir: str, step_name: str) -> str:
-    """<base_dir>/<log_dir>/<job_name>-<step_name>.log -- one op's own print0 output for one step,
-    and nothing else (the filename already names the step, so runtime.log_to_file strips a
-    redundant leading "[step_name] " from each line written here)."""
-    return os.path.join(_log_dir_path(log_dir), f"{_job_stem(job_path)}-{step_name}.log")
+def _step_log_path(job_path: str, experiment: str, step_name: str) -> str:
+    """<base_dir>/experiments/<experiment>/logs/<job_name>-<step_name>.log -- one op's own print0
+    output for one step, and nothing else (the filename already names the step, so
+    runtime.log_to_file strips a redundant leading "[step_name] " from each line written here)."""
+    return os.path.join(_log_dir_path(experiment), f"{_job_stem(job_path)}-{step_name}.log")
 
 
 def _state_exists(path: str) -> bool:
@@ -299,6 +306,115 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+def _needs_write(steps: list[dict]) -> bool:
+    """Does any step push artifacts to the bucket (as opposed to only pulling inputs)?"""
+    for step in steps:
+        if step["op"] in ("prepare", "tokenizer") and step.get("push", True):
+            return True
+        if step["op"] == "train" and (step.get("push_model", "last") != "none" or step.get("push_optim", "last") != "none"):
+            return True
+    return False
+
+
+def _snapshot_run(job_path: str, experiment: str, steps: list[dict]) -> None:
+    """Write-once copies of the job file and every model_config it names under
+    <base_dir>/experiments/<experiment>/{jobs,configs}/, so the bucket records what was actually run.
+    A changed job file (same name, different content) gets a timestamped sibling, never an overwrite."""
+    from tinylab.runtime import experiment_dir
+
+    def copy(src: str, folder: str, name: str, stem_suffix: str):
+        dest_dir = os.path.join(experiment_dir(experiment), folder)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, name)
+        if os.path.exists(dest):
+            with open(src, "rb") as a, open(dest, "rb") as b:
+                if a.read() == b.read():
+                    return
+            root, ext = os.path.splitext(name)
+            dest = os.path.join(dest_dir, f"{root}.{stem_suffix}{ext}")
+            if os.path.exists(dest):
+                return
+        shutil.copyfile(src, dest)
+
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    copy(job_path, "jobs", os.path.basename(job_path), stamp)
+    for config in sorted({s["model_config"] for s in steps if "model_config" in s}):
+        copy(config, "configs", os.path.basename(config), stamp)
+
+
+def _open_remote(steps: list[dict], job_path: str, experiment: str | None):
+    """(remote, uploader, experiment_sync) for a run whose steps name a "remote", else all None.
+    Fail-fast before any GPU time is spent: a run that pushes artifacts needs a working write token,
+    and a run that only pulls (e.g. a bench pod with no token) goes ahead read-only."""
+    url = steps[0].get("remote") if steps else None
+    if not url:
+        return None, None, None
+    from tinylab import remote as remote_mod
+    from tinylab.runtime import print0
+    try:
+        remote = remote_mod.open_remote(url)
+        who = remote.check_write()
+    except remote_mod.RemoteError as e:
+        if _needs_write(steps):
+            raise JobError(f"{job_path}: this job pushes to {url} but cannot write to it -- {e}. Set HF_TOKEN (a "
+                           f"write token for the bucket), or set \"push\"/\"push_model\"/\"push_optim\" to "
+                           f"off on the steps that shouldn't push.") from None
+        print0(f"remote: {url} is read-only here ({e}) -- pulling missing inputs only, nothing will be pushed")
+        return remote_mod.open_remote(url), None, None
+    print0(f"remote: {url} (writing as {who})")
+    return remote, remote_mod.Uploader(remote), remote_mod.ExperimentSync(remote, experiment)
+
+
+@contextmanager
+def _remote_session(steps: list[dict], job_path: str, experiment: str | None):
+    """Owns the run's remote plumbing. On exit -- clean or not -- waits for queued pushes and does a
+    last experiment-folder sync. A clean run then raises if anything failed to upload (so the
+    problem is impossible to miss); a failed run only prints, never masking the original error."""
+    remote, uploader, sync = _open_remote(steps, job_path, experiment)
+    session = SimpleNamespace(remote=remote, uploader=uploader, sync=sync)
+    if sync is not None:
+        _snapshot_run(job_path, experiment, steps)
+        sync.start()
+    errors: list[str] = []
+
+    def close():
+        for closer in (uploader.flush if uploader else None, sync.close if sync else None):
+            if closer is not None:
+                try:
+                    closer()
+                except Exception as e:  # noqa: BLE001
+                    errors.append(str(e))
+
+    try:
+        yield session
+    except BaseException:
+        close()
+        if errors:
+            from tinylab.runtime import print0
+            print0(f"remote: uploads also failed: {'; '.join(errors)}")
+        raise
+    close()
+    if errors:
+        from tinylab import remote as remote_mod
+        raise remote_mod.UploadError("; ".join(errors) + " -- artifacts are safe on local disk; "
+                                     "redo with `python -m tinylab remote push`")
+
+
+def _record_result(session, job_path: str, experiment: str, step_name: str, result: dict) -> None:
+    """Appends the step's result dict to experiments/<experiment>/results/<job>.results.jsonl (only
+    for a run with a "remote") and lets the experiment folder sync pick it up right away."""
+    from tinylab.runtime import experiment_dir, print0
+    path = os.path.join(experiment_dir(experiment), "results", f"{_job_stem(job_path)}.results.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"step": step_name, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **result}) + "\n")
+    if session.sync is not None:
+        try:
+            session.sync.sync()
+        except Exception as e:  # noqa: BLE001 -- best effort here; close() retries and reports
+            print0(f"remote: experiment sync failed ({e!r}); will retry")
+
+
 def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, resume: bool = False) -> list[dict]:
     """Loads, validates, and (unless dry_run) runs every resolved step in order. Returns each
     step's result dict (or, for --dry-run, its fully resolved config instead) -- for a resumed run
@@ -325,9 +441,9 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
     unconditionally from an unattended restart script. The state file is deleted only when every
     step finishes without raising; a step that fails leaves it in place, exactly as intended.
 
-    Logging: a real (non-dry-run) run with at least one step requires "log_dir" (one per run, read
-    off the first resolved step like "device" -- no code-level default, see docs/job-file.md).
-    Everything is written under <base_dir>/<log_dir>/: one general log (run start/finish, each
+    Logging: a real (non-dry-run) run with at least one step requires "experiment" (one per run,
+    read off the first resolved step like "device" -- no code-level default, see docs/job-file.md).
+    Everything is written under <base_dir>/experiments/<experiment>/logs/: one general log (run start/finish, each
     step's own start/result line, a top-level failure, the final job-state dump) plus one log per
     executed step (that step's own print0 output, nothing else) -- see _general_log_path/
     _step_log_path and runtime.log_to_file."""
@@ -346,20 +462,20 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
     # Format already validated (if present) by resolve_steps -> _check_tag_shaped_keys, the same
     # as output_tag/source_tag/model_tag -- only presence is checked here, since "required" is a
     # property of actually running (this function), not of a step's own key set.
-    log_dir = steps[0].get("log_dir") if steps else None
-    if steps and not log_dir:
+    experiment = steps[0].get("experiment") if steps else None
+    if steps and not experiment:
         raise JobError(
-            f"{job_path}: \"log_dir\" is required (put it in \"defaults\") -- tinylab writes no "
+            f"{job_path}: \"experiment\" is required (put it in \"defaults\") -- tinylab writes no "
             f"log files to a guessed location. Every step's own output, plus this run's general "
-            f"log, is written under <base_dir>/<log_dir>/."
+            f"log, is written under <base_dir>/experiments/<experiment>/logs/."
         )
 
-    # nullcontext when there's nothing to run (steps == [], the only case log_dir can be unset) --
+    # nullcontext when there's nothing to run (steps == [], the only case experiment can be unset) --
     # everything from here down, including the job-state-file machinery, runs inside the general
     # log so a state-file warning or a top-level failure lands there too, not just stdout.
-    general_log = log_to_file(_general_log_path(job_path, log_dir)) if log_dir else nullcontext()
-    with general_log:
-        if log_dir:
+    general_log = log_to_file(_general_log_path(job_path, experiment)) if experiment else nullcontext()
+    with _remote_session(steps, job_path, experiment) as remote_session, general_log:
+        if experiment:
             print0(f"=== job {_job_stem(job_path)} started (pid={os.getpid()}) ===")
 
         tracking = only is None
@@ -415,7 +531,9 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
         # made absolute in resolve_steps).
         tokenizer_spec = steps[0].get("tokenizer") if steps else None
         ctx = Context(device_type=device_type, resume=resume, tokenizer_spec=tokenizer_spec,
-                      _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress)
+                      _resume_checkpoint_steps=resume_hints, _on_checkpoint=_record_progress,
+                      remote=remote_session.remote, uploader=remote_session.uploader, experiment=experiment,
+                      job_name=_job_stem(job_path) if steps else None)
         results = []
         try:
             for step in steps:
@@ -423,12 +541,14 @@ def run_file(job_path: str, *, only: str | None = None, dry_run: bool = False, r
                     print0(f"=== [{step['name']}] already completed, skipping (--resume) ===")
                     continue
                 print0(f"=== [{step['name']}] op={step['op']} ===")
-                step_log = (log_to_file(_step_log_path(job_path, log_dir, step["name"]), strip_prefix=f"[{step['name']}] ")
-                            if log_dir else nullcontext())
+                step_log = (log_to_file(_step_log_path(job_path, experiment, step["name"]), strip_prefix=f"[{step['name']}] ")
+                            if experiment else nullcontext())
                 with step_log:
                     result = OPS[step["op"]].run(step, ctx)
                 print0(json.dumps(result))
                 results.append(result)
+                if remote_session.remote is not None:
+                    _record_result(remote_session, job_path, experiment, step["name"], result)
                 steps_state[step["name"]] = {"status": "done"}
                 if tracking:
                     state_content = _write_state(state_path, dict(state_content, steps=steps_state))

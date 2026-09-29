@@ -205,7 +205,7 @@ def test_resume_skips_completed_steps_after_a_crash(tmp_path, base_dir, monkeypa
     liveness check is exercised for real, separately, in test_resume_refuses_when_recorded_pid_is_
     still_alive/test_resume_proceeds_when_recorded_pid_is_dead below."""
     monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
-    doc = {"defaults": {"log_dir": "logs"}, "steps": [
+    doc = {"defaults": {"experiment": "scratch"}, "steps": [
         {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "c", "op": "prepare", "kind": "base", "sequence_len": 8},
@@ -249,7 +249,7 @@ def test_resume_skips_completed_steps_after_a_crash(tmp_path, base_dir, monkeypa
 
 
 def test_resume_with_no_state_file_is_a_normal_fresh_run(tmp_path, base_dir, monkeypatch):
-    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"experiment": "scratch"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     monkeypatch.setattr("tinylab.ops.prepare.run", lambda cfg, ctx: {"op": "prepare"})
     results = job.run_file(path, resume=True)
@@ -260,7 +260,7 @@ def test_resume_with_no_state_file_is_a_normal_fresh_run(tmp_path, base_dir, mon
 def test_only_bypasses_the_state_file_mechanism_entirely(tmp_path, base_dir, monkeypatch):
     """--only is a deliberate single-step override -- it must never touch the job state file, so
     it keeps working even while a previous full-pipeline run's state file still exists."""
-    doc = {"defaults": {"log_dir": "logs"}, "steps": [
+    doc = {"defaults": {"experiment": "scratch"}, "steps": [
         {"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8},
         {"name": "b", "op": "prepare", "kind": "base", "sequence_len": 8},
     ]}
@@ -343,7 +343,7 @@ def test_resume_refuses_when_recorded_pid_is_still_alive(tmp_path, base_dir):
     """A still-alive recorded pid is refused even with resume=True -- it means a genuinely
     concurrent run, not a crashed one, and racing two processes on the same checkpoint files
     would be real corruption."""
-    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"experiment": "scratch"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     state_path = job._state_path(path)
     job._write_state(state_path, {"job_path": path, "pid": os.getpid(), "steps": {}})
@@ -355,7 +355,7 @@ def test_resume_refuses_when_recorded_pid_is_still_alive(tmp_path, base_dir):
 
 
 def test_resume_proceeds_when_recorded_pid_is_dead(tmp_path, base_dir, monkeypatch):
-    doc = {"defaults": {"log_dir": "logs"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
+    doc = {"defaults": {"experiment": "scratch"}, "steps": [{"name": "a", "op": "prepare", "kind": "base", "sequence_len": 8}]}
     path = _write_job(tmp_path, doc)
     state_path = job._state_path(path)
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -374,7 +374,7 @@ def test_train_step_records_progress_and_resume_passes_it_as_a_hint(tmp_path, ba
     tinylab.ops.train's own resume detection reads from. _pid_alive stubbed False for the same
     reason as test_resume_skips_completed_steps_after_a_crash above."""
     monkeypatch.setattr(job, "_pid_alive", lambda pid: False)
-    doc = {"defaults": {"log_dir": "logs"},
+    doc = {"defaults": {"experiment": "scratch"},
            "steps": [{"name": "pre", "op": "train", "kind": "base", "sequence_len": 8,
                        "model_config": "cfg.json", "total_batch_size": 1, "world_size": 1,
                        "eval_tokens": 1, "num_iterations": 1}]}
@@ -409,7 +409,7 @@ def test_device_propagates_to_every_op_not_just_chat(tmp_path, monkeypatch):
     tinylab.chat (which builds its own Context separately) honored a job's "device" default --
     every op silently ignored it. Confirm run_file now threads it through too."""
     doc = {
-        "defaults": {"device": "cpu", "sequence_len": 8, "log_dir": "logs"},
+        "defaults": {"device": "cpu", "sequence_len": 8, "experiment": "scratch"},
         "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}],
     }
     path = _write_job(tmp_path, doc)
@@ -522,7 +522,7 @@ def test_chat_blocks_tokenizer_path_resolves_against_the_job_dir(tmp_path):
 
 def test_the_run_wide_tokenizer_reaches_every_ops_context(tmp_path, base_dir, monkeypatch):
     """Like "device": read off the first resolved step, so it lives in defaults."""
-    doc = {"defaults": {"device": "cpu", "sequence_len": 8, "tokenizer": "bpe32k", "log_dir": "logs"},
+    doc = {"defaults": {"device": "cpu", "sequence_len": 8, "tokenizer": "bpe32k", "experiment": "scratch"},
            "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}]}
     seen = {}
     def fake_run(cfg, ctx):

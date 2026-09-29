@@ -33,7 +33,8 @@ fresh start or a continuation is a fact about the invocation, not the pipeline. 
 | `model_config` | Path to a materialized `modelcore.ModelConfig` tree (a dict with `"#type"` markers, `"format": "modelcore.v2"`) — dumped by nanochat's `scripts/model_info.py --dump-config`, or hand-written. A `modelcore.v1` file still loads (modelcore upgrades it). Relative paths resolve against the job file's own directory. tinylab does no preset/depth-dial derivation of its own — see AGENTS.md. Required for `train` with `kind: base`; optional for `kind: sft` (an adapter-override request on top of the loaded checkpoint's own config). Loading checks the tree's own `sequence_len`/`vocab_size` (baked in when it was dumped) match the step's `"sequence_len"` and the local tokenizer's vocab size — a mismatch is a hard error. Irrelevant to `prepare`/`bench`, harmless if present. | — |
 | `world_size` | The GPU count a `train` step's `total_batch_size`/grad-accum arithmetic assumes — checked against the actual launch (e.g. `torchrun --nproc_per_node`) and a hard error on mismatch, since the job file fixes GPU count rather than tinylab inferring it. Irrelevant to `prepare`/`bench`. Required by `train`. | — |
 | `tokenizer` | Which tokenizer this step uses: a **bare name** (`"bpe32k"` → `<base_dir>/tokenizers/bpe32k/`) or, if the value contains a path separator, a **path** (`"./toks/mine"`; relative paths resolve against the job file's own directory, like `model_config`). Read **per step**, not once for the whole run: a step without its own `"tokenizer"` falls back to the run's default (read off the first resolved step, same as `device` — put it in `defaults` for the common case of one tokenizer per run). A job training several differently-vocabbed models sets `"tokenizer"` on each `prepare`/`train`/`bench` step that needs a non-default one instead — see "Training two differently-vocabbed models" below. The default one is tinylab's bundled vocab, copied to `<base_dir>/tokenizers/default/` on first use; any other name must already exist (train it with a `tokenizer` step first). `bench`/`chat` pick up the checkpoint's own recorded tokenizer on their own when this is unset, and refuse to load it with one whose fingerprint differs. | run's default, else `"default"` |
-| `log_dir` | Where `python -m tinylab job.json` (not `--dry-run`) writes this run's log files: `<base_dir>/<log_dir>/<job_name>.log` (the whole run) plus `<base_dir>/<log_dir>/<job_name>-<step_name>.log` per executed step. One value for a whole run, like `device` — put it in `defaults`. Same 1-4-`/`-joined-names format as a checkpoint tag (see the glossary below); no built-in fallback location, so a run with no `log_dir` set is a hard error before any step executes. | **required** |
+| `experiment` | The experiment this run belongs to: the name of its card folder in git (`01-ffn-width-vs-heads`) or `scratch`, 1-64 characters from `[A-Za-z0-9_-]`. `python -m tinylab job.json` (not `--dry-run`) writes this run's log files to `<base_dir>/experiments/<experiment>/logs/<job_name>.log` (the whole run) plus `.../logs/<job_name>-<step_name>.log` per executed step. One value for a whole run, like `device` — put it in `defaults`. No built-in fallback location, so a run with no `experiment` set is a hard error before any step executes. | **required** |
+| `remote` | `hf://buckets/<owner>/<bucket>`: the central store this run pulls missing inputs from and pushes artifacts to (see [remote.md](remote.md)). One value for a whole run — put it in `defaults`. Never put a token in a job file; writes use `HF_TOKEN`. | unset (fully offline) |
 
 ## `prepare`
 
@@ -47,6 +48,7 @@ GSM8K conversation mixture. Required: `kind`.
 | `sequences_per_volume` | Datacore's on-disk shard granularity. | `16384` | both |
 | `buffer_size` | Packer's best-fit lookback window. | `1000` | both |
 | `tokenizer_threads` | Parallel tokenization threads. | `os.cpu_count()` | both |
+| `push` | With a `remote`: upload each shard as it is written, and the manifest last (see [remote.md](remote.md)). `false` keeps the dataset local. | `true` | both |
 | `shards` | Number of ClimbMix train shards to download and pack (plus one fixed validation shard). | `8` | base |
 | `max_conversations` | Caps both the train and val conversation mixtures (for a fast smoke run). | unset (full mixture) | sft |
 | `mmlu_epochs` | How many passes of MMLU's auxiliary-train split to mix into SFT training data. | `3` | sft |
@@ -99,6 +101,8 @@ AGENTS.md.
 | `doc_masking_max_docs_per_row` | Override `build_doc_args`'s default per-row document budget (`DEFAULT_MAX_DOCS_PER_ROW=64`). | unset | both |
 | `adapter_lr` | Learning rate for adapter (LoRA/DoRA A/B) params. Only meaningful when `model_config` carries `adapters`. | `modelcore.OptimizerHparams.adapter_lr` | both |
 | `adapter_scalar_lr` | Learning rate for DoRA's per-channel magnitude param. | `modelcore.OptimizerHparams.adapter_scalar_lr` | both |
+| `push_model` | With a `remote`: which checkpoint steps' `model_<step>.pt` + `meta_<step>.json` go to the bucket — `"last"` (every save is pushed, then the remote copies of older steps are deleted, so the bucket always holds the newest state), `"all"`, `"none"`, or a list of steps such as `[1000, 4200]`. Never deletes anything that isn't this tag's own older step. | `"last"` | both |
+| `push_optim` | Same policy values, for `optim_<step>_rank<r>.pt`. Keep it at least as generous as you want `--resume` and sft `load_optimizer` to be able to start from the bucket. | `"last"` | both |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |
 | `init_lr_frac` | Starting sft LR as a fraction of the (possibly warm-started) base LR — nanochat's `chat_sft.py --init-lr-frac`. | `0.8` | sft |
@@ -120,6 +124,7 @@ default below matches nanochat's own `scripts/tok_train.py`.
 | `doc_cap` | Truncates any single document to this many characters before it reaches the trainer. | `10000` |
 | `max_chars` | Stops reading once this many characters (post-`doc_cap`) have been seen. | `2000000000` |
 | `output` | Which tokenizer to write: a bare name (`<base_dir>/tokenizers/<name>/`) or a path, same rule as the common `tokenizer` key. | the step's own `tokenizer`, else `"default"` |
+| `push` | With a `remote`: upload the new tokenizer folder (`tokenizer.pkl` last) and its README. `false` keeps it local. | `true` |
 
 ## `bench`
 
@@ -192,7 +197,7 @@ address**. It is 1 to 4 `/`-joined names: `gpt-d12-base`, `kvcache/d13-chat`,
 `experiments/run3`. Each name is 1-16 characters from `[A-Za-z0-9_-]` — letters, digits, `_`, `-`,
 nothing else (`tinylab.checkpoints.validate_name`/`validate_tag`). What *kind* of checkpoint it is
 — pretrained, fine-tuned, whatever comes next — is yours to say in the tag; nothing in the path
-encodes it. The same rule validates a job's `log_dir` (see below) and every step's own `name`.
+encodes it. The same rule validates every step's own `name`.
 
 Three job keys name a tag, and all three are complete addresses:
 

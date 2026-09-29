@@ -31,6 +31,13 @@ class Context:
     # directory for the latest step, as it always has.
     _resume_checkpoint_steps: dict = field(default_factory=dict, repr=False, compare=False)
     _on_checkpoint: object | None = field(default=None, repr=False, compare=False)
+    # Central store plumbing, wired up by tinylab.job.run_file from the "remote" key (see
+    # docs/remote.md). `remote` alone is enough to *pull* missing inputs; `uploader` (background
+    # pushes) is set only when the run can write. Both None == fully offline, as always.
+    remote: object | None = field(default=None, repr=False, compare=False)
+    uploader: object | None = field(default=None, repr=False, compare=False)
+    experiment: str | None = None
+    job_name: str | None = None
 
     def resume_checkpoint_step(self, step_name: str) -> "int | None":
         """The job-state-file-confirmed checkpoint step to resume step_name from, or None if
@@ -45,6 +52,13 @@ class Context:
         so this is always safe to call."""
         if self._on_checkpoint is not None:
             self._on_checkpoint(step_name, checkpoint_step)
+
+    def producer(self, step_name: str) -> dict:
+        """The README `producer` record for something this step writes to the bucket."""
+        from tinylab import remote as remote_mod
+        world_size = self.device_info[3] if self._device_info is not None else 1
+        return remote_mod.make_producer(self.experiment or "scratch", self.job_name or "adhoc", step_name,
+                                        remote_mod.describe_hardware(world_size))
 
     @property
     def device_info(self):
@@ -112,7 +126,7 @@ class Context:
         from tinylab.tokenizer import get_tokenizer, resolve_tokenizer_dir
         key = resolve_tokenizer_dir(spec)
         if key not in self._tokenizers:
-            self._tokenizers[key] = get_tokenizer(tokenizer=spec)
+            self._tokenizers[key] = get_tokenizer(tokenizer=spec, remote=self.remote)
         return self._tokenizers[key]
 
     def tokenizer_name_for(self, spec):
@@ -145,11 +159,12 @@ class Context:
 # run default only when a step doesn't set one. A job training two differently-vocabbed models sets
 # "tokenizer" per relevant step rather than in "defaults" -- see docs/job-file.md.
 #
-# "log_dir" is one-per-run like "device", but has no code-level default at all -- job.run_file
+# "experiment" is one-per-run like "device", but has no code-level default at all -- job.run_file
 # requires it (a JobError if missing, checked once it's actually needed, not here) rather than
 # guessing a location under base_dir for a log file nobody asked for. See docs/job-file.md and
-# tinylab.checkpoints.validate_tag for its "1-4 names" format.
-COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer", "log_dir"}
+# tinylab.checkpoints.validate_experiment. "remote" (an hf://buckets/... URL, see docs/remote.md)
+# is one-per-run as well; absent means fully offline, as before.
+COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer", "experiment", "remote"}
 
 
 from tinylab.ops import prepare, train, bench, tokenizer  # noqa: E402 -- after Context, to avoid a cycle

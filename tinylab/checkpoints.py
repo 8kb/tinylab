@@ -37,11 +37,22 @@ def validate_name(name, *, label="name"):
     return name
 
 
+_EXPERIMENT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def validate_experiment(name):
+    """An experiment id: the name of its card folder in git ("01-ffn-width-vs-heads") or "scratch".
+    Longer than validate_name allows (up to 64), since it names a folder, not a filename part."""
+    if not isinstance(name, str) or not _EXPERIMENT_RE.match(name):
+        raise ValueError(f"experiment must be 1-64 characters from [A-Za-z0-9_-], got {name!r}")
+    return name
+
+
 def validate_tag(tag, *, label="checkpoint tag"):
     """A tag is 1-4 "/"-joined names (see validate_name) -- e.g. "gpt-d12-base" or
     "kvcache/d13-chat". `label` only changes the wording of a raised error, so the same validator
     serves checkpoint tags (output_tag/source_tag/model_tag) and any other "/"-joined path segment
-    under <base_dir> that needs the same treatment (e.g. a job's log_dir). Returns tag."""
+    under <base_dir> that needs the same treatment. Returns tag."""
     if not isinstance(tag, str) or not tag:
         raise ValueError(f"{label} must be a non-empty string, got {tag!r}")
     segments = tag.split("/")
@@ -58,7 +69,61 @@ def resolve_checkpoint_dir(tag, base_dir=None):
     return os.path.join(base_dir or get_base_dir(), CHECKPOINTS_DIR, *tag.split("/"))
 
 
-def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=0):
+def _rank0_then_barrier(fn):
+    """Runs fn on rank 0 only, then holds every rank at a barrier (when a process group exists), so
+    nobody reads what rank 0 just pulled -- or rank 0 pushes what a peer is still writing -- early.
+    Rank 0's exception is re-raised after the barrier, so peers aren't left hanging."""
+    import torch.distributed as dist
+    error = None
+    if int(os.environ.get("RANK", 0)) == 0:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            error = e
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+    if error is not None:
+        raise error
+
+
+def ensure_local(remote, tag, step=None, *, optim=False, ranks=None):
+    """Makes sure checkpoint `tag` is on disk, pulling *only what's missing* from `remote`: with
+    step=None, the newest step in the bucket that has a marker -- but only when the tag has no
+    complete step locally at all (a local copy always wins, never refreshed). With an explicit
+    step, model+meta of that step (and optim_* shards when `optim`). Returns the step now on disk
+    (or None when step is None and the tag was already local). No-op for remote=None."""
+    if remote is None:
+        return step
+    from tinylab import remote as remote_mod
+    checkpoint_dir = resolve_checkpoint_dir(tag)
+    found = []
+
+    def local_has(s):
+        names = [f"model_{s:06d}.pt", f"meta_{s:06d}.json"]
+        if optim:
+            names += [f"optim_{s:06d}_rank{r}.pt" for r in (ranks if ranks is not None else [0])]
+        return all(os.path.exists(os.path.join(checkpoint_dir, n)) for n in names)
+
+    if step is not None:
+        if local_has(step):
+            return step
+    else:
+        try:
+            last = find_last_step(checkpoint_dir)
+        except FileNotFoundError:
+            last = None
+        if last is not None and local_has(last):
+            return last
+        step = last if last is not None else None
+
+    def pull():
+        found.append(remote_mod.pull_checkpoint(remote, tag, step=step, optim=optim, ranks=ranks))
+
+    _rank0_then_barrier(pull)
+    return found[0] if found else find_last_step(checkpoint_dir) if step is None else step
+
+
+def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=0, push=None, barrier=False):
     """Writes model_data (a state_dict) and meta_data (a plain dict -- see docs/architecture.md's
     "On-disk layout" for the fields tinylab.ops.train populates) to checkpoint_dir at this step,
     merging into any existing meta.json there rather than overwriting it. optimizer_data (also a
@@ -74,9 +139,16 @@ def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data,
     if optimizer_data is not None:
         os.makedirs(checkpoint_dir, exist_ok=True)
         store.write_optimizer_state(optimizer_data, rank=rank)
+    if barrier:
+        # Every rank's optimizer shard must be fully on disk before rank 0 queues the upload.
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+    if push is not None and rank == 0:
+        push(step)
 
 
-def build_model(checkpoint_dir, step, device, phase, config_override=None, tokenizer_spec=None):
+def build_model(checkpoint_dir, step, device, phase, config_override=None, tokenizer_spec=None, remote=None):
     """Builds a model from a checkpoint. config_override, if given, replaces the checkpoint's own
     stored config (e.g. a hand-edited tree with adapters attached, loaded via
     tinylab.modelconfig.load_model_config) -- see ModelManager.load_model's own docstring for the
@@ -101,7 +173,7 @@ def build_model(checkpoint_dir, step, device, phase, config_override=None, token
         meta_data = json.load(f)
     if tokenizer_spec is None:
         tokenizer_spec = ((meta_data.get("model_config") or {}).get("tokenizer") or {}).get("name")
-    tokenizer = get_tokenizer(tokenizer=tokenizer_spec)
+    tokenizer = get_tokenizer(tokenizer=tokenizer_spec, remote=remote)
     assert tokenizer.get_vocab_size() == model.config.vocab_size, (
         f"Tokenizer vocab size {tokenizer.get_vocab_size()} does not match model config vocab "
         f"size {model.config.vocab_size}"
@@ -136,19 +208,22 @@ def load_for_resume(checkpoint_dir, step, device, rank, manager):
     return model, store.read_optimizer_state(rank=rank, map_location=device), store.read_meta()
 
 
-def load_model(model_tag, device, phase, step=None, config_override=None, tokenizer_spec=None):
+def load_model(model_tag, device, phase, step=None, config_override=None, tokenizer_spec=None, remote=None):
     """model_tag is required -- tinylab has no auto-discovery, since a job file always names the
-    tag it just trained or wants to load. config_override, tokenizer_spec: see build_model."""
+    tag it just trained or wants to load. config_override, tokenizer_spec: see build_model.
+    remote: if given, a checkpoint (or step) missing locally is pulled from the bucket first --
+    model + meta only, never the optimizer."""
     checkpoint_dir = resolve_checkpoint_dir(model_tag)
+    step = ensure_local(remote, model_tag, step) or step
     if step is None:
         step = find_last_step(checkpoint_dir)
     model, tokenizer, meta_data = build_model(checkpoint_dir, step, device, phase, config_override=config_override,
-                                              tokenizer_spec=tokenizer_spec)
+                                              tokenizer_spec=tokenizer_spec, remote=remote)
     meta_data["model_tag"] = model_tag
     return model, tokenizer, meta_data
 
 
-def load_optimizer_state(model_tag, step, device, rank):
+def load_optimizer_state(model_tag, step, device, rank, remote=None):
     """This rank's optimizer shard from another tag's checkpoint, without re-loading its model --
     what a kind="sft" step's momentum warm-start (tinylab.ops.train) needs from its own
     "source_tag". Mirrors nanochat's checkpoint_manager.load_optimizer_state, minus the
@@ -157,5 +232,6 @@ def load_optimizer_state(model_tag, step, device, rank):
     saved (e.g. an older checkpoint, or optimizer state genuinely absent) -- the caller decides
     whether that's fatal."""
     checkpoint_dir = resolve_checkpoint_dir(model_tag)
+    ensure_local(remote, model_tag, step, optim=True, ranks=range(int(os.environ.get("WORLD_SIZE", 1))))
     store = FileSystemStore(checkpoint_dir, step)
     return store.read_optimizer_state(rank=rank, map_location=device)

@@ -36,6 +36,12 @@ def get_base_dir():
     return base_dir
 
 
+def experiment_dir(experiment):
+    """<base_dir>/experiments/<experiment>: logs, job/config snapshots and results of one
+    experiment (mirrored 1:1 in the remote bucket -- see docs/remote.md)."""
+    return os.path.join(get_base_dir(), "experiments", experiment)
+
+
 # The file print0 currently tees to (rank 0 only -- see log_to_file below), plus the
 # f"[{step_name}] " prefix (if any) it strips before writing a line there. A plain module-level
 # pair, not a stack object: nesting is exactly one level deep in practice (job.run_file's own

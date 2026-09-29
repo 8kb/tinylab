@@ -21,6 +21,8 @@ ctx.resume_checkpoint_step (the job state file's own record of the last checkpoi
 through job.run_file). See "Resume" in the run() docstring below.
 """
 import dataclasses
+import hashlib
+import json
 import time
 
 import torch
@@ -32,6 +34,7 @@ from modelcore.kernels.flash_attn import build_doc_args
 from modelcore.optim.schedules import lr_multiplier, muon_momentum
 
 from tinylab import checkpoints, modelconfig
+from tinylab import remote as remote_mod
 from tinylab.ops import prepare
 from tinylab.runtime import COMPUTE_DTYPE, COMPUTE_DTYPE_REASON, print0
 
@@ -46,6 +49,7 @@ _COMMON_KEYS = {
     "fp8", "fp8_eval",
     "doc_masking", "doc_masking_max_docs_per_row",
     "adapter_lr", "adapter_scalar_lr",
+    "push_model", "push_optim",
 }
 _BASE_KEYS = set()
 # init_lr_frac/load_optimizer are sft-only, deliberately: neither exists in nanochat's
@@ -75,7 +79,12 @@ def _open_dataset(cfg, ctx, kind, sequence_len, tokenizer):
     token_bytes) -- token_bytes is the per-token-id byte-length table evaluate_bpb needs."""
     dataset_name = cfg.get("dataset") or prepare.default_dataset_name(kind, sequence_len, tokenizer)
     dataset_dir = prepare.prepared_dir(dataset_name)
-    store = FileSystemDatasetStore(dataset_dir)
+    if ctx.remote is not None:
+        # Missing shards stream in from the bucket while training runs on the ones already local.
+        from tinylab.remote_stores import PrefetchingDatasetStore
+        store = PrefetchingDatasetStore(dataset_dir, name=dataset_name, remote=ctx.remote)
+    else:
+        store = FileSystemDatasetStore(dataset_dir)
     try:
         # expect_sequence_len/expect_fingerprint: datacore's own (opt-in) comparison now, not a
         # hand-written check -- see datacore/AGENTS.md's "tokenizer fingerprint" invariant for why
@@ -166,6 +175,9 @@ def run(cfg: dict, ctx) -> dict:
     )
 
     output_tag = cfg.get("output_tag", cfg["name"])
+    push_model, push_optim = cfg.get("push_model", "last"), cfg.get("push_optim", "last")
+    remote_mod.validate_policy(push_model, key="push_model")
+    remote_mod.validate_policy(push_optim, key="push_optim")
     # One checkpoint namespace means a base and an sft checkpoint can no longer share a tag by
     # living in different directories -- so an sft step must not write where it reads from, or its
     # source weights would be mixed with (and, resuming, mistaken for) its own output.
@@ -224,6 +236,14 @@ def run(cfg: dict, ctx) -> dict:
         # pattern). Only fall back to the scan when there's no such hint -- e.g. this call isn't
         # driven by tinylab.job.run_file at all (a bare Context, as this repo's own tests use).
         resumed_step = ctx.resume_checkpoint_step(cfg["name"])
+        if ctx.remote is not None:
+            # Clean disk (a fresh pod): fetch this step's own newest resumable state from the
+            # bucket -- the hinted step if the state file names one, else the newest with a marker.
+            # A checkpoint already on disk is left alone.
+            try:
+                checkpoints.ensure_local(ctx.remote, output_tag, resumed_step, optim=True, ranks=range(ddp_world_size))
+            except FileNotFoundError:
+                pass  # nothing in the bucket either: an ordinary fresh start
         if resumed_step is None:
             try:
                 resumed_step = checkpoints.find_last_step(checkpoint_dir)
@@ -279,7 +299,7 @@ def run(cfg: dict, ctx) -> dict:
                 config_override = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
             model, _source_tokenizer, meta = checkpoints.load_model(
                 cfg["source_tag"], device, phase="train", step=cfg.get("source_step"),
-                config_override=config_override, tokenizer_spec=tokenizer_spec,
+                config_override=config_override, tokenizer_spec=tokenizer_spec, remote=ctx.remote,
             )
             real_config = model.config
             num_iterations = cfg.get("num_iterations")
@@ -317,7 +337,7 @@ def run(cfg: dict, ctx) -> dict:
                     f"original world_size, or set \"load_optimizer\": false to start sft with a "
                     f"fresh optimizer instead."
                 )
-                warm_start_optimizer_state = checkpoints.load_optimizer_state(cfg["source_tag"], base_model_step, device, ddp_rank)
+                warm_start_optimizer_state = checkpoints.load_optimizer_state(cfg["source_tag"], base_model_step, device, ddp_rank, remote=ctx.remote)
                 assert warm_start_optimizer_state is not None, (
                     f"train: sft step {cfg['name']!r} warm-start (\"load_optimizer\") found no "
                     f"optimizer state for source_tag={cfg['source_tag']!r} step {base_model_step} "
@@ -475,7 +495,26 @@ def run(cfg: dict, ctx) -> dict:
         if kind == "sft":
             meta_data["base_model_tag"] = base_model_tag
             meta_data["base_model_step"] = base_model_step
-        checkpoints.save_checkpoint(checkpoint_dir, step, orig_model.state_dict(), optimizer.state_dict(), meta_data, rank=ddp_rank)
+        push = None
+        if ctx.uploader is not None and (push_model != "none" or push_optim != "none"):
+            def push(step_):
+                inputs = {"dataset": f"prepared/{dataset_name}"}
+                if tokenizer_spec is None or "/" not in tokenizer_spec:
+                    inputs["tokenizer"] = f"tokenizers/{ctx.tokenizer_name_for(tokenizer_spec)}"
+                if kind == "sft":
+                    inputs["source"] = f"checkpoints/{cfg['source_tag']}@{base_model_step}"
+                inputs["model_config_sha256"] = hashlib.sha256(
+                    json.dumps(meta_data["model_config"], sort_keys=True).encode()).hexdigest()
+                producer = ctx.producer(cfg["name"])
+                ctx.uploader.submit(
+                    f"checkpoints/{output_tag}",
+                    lambda remote: remote_mod.push_checkpoint_step(
+                        remote, checkpoint_dir, output_tag, step_, push_model=push_model, push_optim=push_optim,
+                        ranks=range(ddp_world_size), producer=producer, inputs=inputs, motivation=cfg.get("_comment", ""),
+                        metrics={"step": step_, "val_bpb": val_bpb}),
+                    label=f"checkpoints/{output_tag}@{step_}")
+        checkpoints.save_checkpoint(checkpoint_dir, step, orig_model.state_dict(), optimizer.state_dict(), meta_data,
+                                    rank=ddp_rank, push=push, barrier=ctx.uploader is not None)
         # Only after the save above has fully returned -- this is the signal job.run_file's job
         # state file trusts as "this step is safely resumable from here" (see ctx.record_checkpoint
         # and the resume-detection block above). Firing it any earlier would defeat the whole point.

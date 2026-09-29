@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "benchcore[bundle]",
     "datacore[torch,parquet]",
+    "huggingface_hub>=1.31",
     "modelcore[fa3]",
     "rustbpe>=0.1.0",
     "tiktoken>=0.11.0",

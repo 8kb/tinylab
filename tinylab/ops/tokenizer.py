@@ -18,9 +18,9 @@ import torch
 
 from tinylab import data
 from tinylab.runtime import print0
-from tinylab.tokenizer import RustBPETokenizer, resolve_tokenizer_dir
+from tinylab.tokenizer import DEFAULT_TOKENIZER_NAME, RustBPETokenizer, resolve_tokenizer_dir
 
-_COMMON_KEYS = {"max_chars", "doc_cap", "vocab_size", "shards", "output"}
+_COMMON_KEYS = {"max_chars", "doc_cap", "vocab_size", "shards", "output", "push"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -41,6 +41,23 @@ def _text_iterator(train_paths, doc_cap, max_chars):
             yield doc
             if nchars > max_chars:
                 return
+
+
+def _push(cfg, ctx, tokenizer, name, tokenizer_dir, chars_per_token):
+    from tinylab import remote as remote_mod
+    entity = f"tokenizers/{name}"
+    producer = ctx.producer(cfg["name"])
+    extra = {"vocab_size": tokenizer.get_vocab_size(), "fingerprint": tokenizer.fingerprint()}
+    if chars_per_token is not None:
+        extra["chars_per_token"] = round(chars_per_token, 4)
+
+    def task(remote):
+        existing = remote_mod.gate_producer(remote, entity, producer)
+        remote_mod.push_dir(remote, tokenizer_dir, entity, marker_name="tokenizer.pkl")
+        remote_mod.write_readme(remote, entity, existing, kind="tokenizer", producer=producer, motivation=cfg.get("_comment", ""),
+                                extra=extra, history="pushed")
+
+    ctx.uploader.submit(entity, task, marker=True, label=entity)
 
 
 def run(cfg: dict, ctx) -> dict:
@@ -87,6 +104,9 @@ def run(cfg: dict, ctx) -> dict:
     token_bytes = torch.tensor(tokenizer.token_byte_lengths(), dtype=torch.int32)
     torch.save(token_bytes, os.path.join(tokenizer_dir, "token_bytes.pt"))
     print0(f"Saved tokenizer to {tokenizer_dir}")
+
+    if ctx.uploader is not None and cfg.get("push", True) and not (output and ("/" in output or os.sep in output)):
+        _push(cfg, ctx, tokenizer, output or DEFAULT_TOKENIZER_NAME, tokenizer_dir, chars_per_token)
 
     return {
         "op": "tokenizer", "output": tokenizer_dir, "vocab_size": tokenizer.get_vocab_size(),

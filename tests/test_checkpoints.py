@@ -60,8 +60,8 @@ def test_validate_name_accepts_a_single_short_name(good):
 
 
 def test_validate_tag_and_validate_name_error_messages_use_the_given_label():
-    with pytest.raises(ValueError, match="log_dir"):
-        validate_tag("bad name", label="log_dir")
+    with pytest.raises(ValueError, match="my label"):
+        validate_tag("bad name", label="my label")
     with pytest.raises(ValueError, match="step name"):
         validate_name("bad name", label="step name")
 

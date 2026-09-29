@@ -55,7 +55,7 @@ point is to prove the plumbing works end to end, not to produce something worth 
     "sequence_len": 2048,
     "world_size": 1,
     "model_config": "configs/gpt_d4.json",
-    "log_dir": "logs"
+    "experiment": "scratch"
   },
   "steps": [
     { "name": "data", "op": "prepare", "kind": "base", "shards": 2 },

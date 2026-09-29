@@ -292,16 +292,24 @@ def resolve_tokenizer_dir(spec=None, *, base_dir=None):
     return os.path.join(base_dir or get_base_dir(), TOKENIZERS_DIR, spec)
 
 
-def get_tokenizer(base_dir=None, tokenizer=None):
+def get_tokenizer(base_dir=None, tokenizer=None, remote=None):
     """Loads the tokenizer `tokenizer` names (see resolve_tokenizer_dir; None -> the default).
     Only the default one is ever materialized for you -- tinylab's bundled vocab is copied into
     <base_dir>/tokenizers/default/ on first use (mirrors nanochat's convention of a repo-committed
     tokenizer, but does the copy in Python instead of requiring a shell step -- tinylab has no
     shell runners). Any other name that doesn't exist raises: silently handing back the default
     vocab under a different name would pass every fingerprint check, since they would be
-    fingerprint-identical."""
+    fingerprint-identical. With `remote` set, a missing *named* tokenizer is first pulled from the
+    bucket (`tokenizers/<name>/`) -- only if it isn't local, so a local copy always wins."""
     tokenizer_dir = resolve_tokenizer_dir(tokenizer, base_dir=base_dir)
     pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
+    if (remote is not None and not os.path.exists(pickle_path) and isinstance(tokenizer, str)
+            and tokenizer != DEFAULT_TOKENIZER_NAME and "/" not in tokenizer and os.sep not in tokenizer):
+        from tinylab import remote as remote_mod
+        try:
+            remote_mod.pull_tokenizer(remote, tokenizer, base_dir=base_dir)
+        except FileNotFoundError:
+            pass  # not in the bucket either: fall through to the usual "not found" error below
     if not os.path.exists(pickle_path):
         if tokenizer is not None and tokenizer != DEFAULT_TOKENIZER_NAME:
             raise FileNotFoundError(

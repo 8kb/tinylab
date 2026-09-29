@@ -3,6 +3,7 @@ The entire tinylab CLI:
 
     python -m tinylab <job.json> [--only NAME] [--dry-run] [--resume]   # run the pipeline
     python -m tinylab chat <job.json>                                  # interactive chat
+    python -m tinylab remote ls|pull|push|check|rm|push-docs ...       # the central bucket (docs/remote.md)
 
 Every other knob is a JSON key in the job file -- see README.md. `--resume` continues a previous,
 interrupted run of the same job file (see tinylab.job.run_file's docstring for the job state file
@@ -18,6 +19,10 @@ def main(argv=None):
     if not argv:
         print(__doc__)
         return 2
+
+    if argv[0] == "remote":
+        from tinylab import remote_cli
+        return remote_cli.main(argv[1:])
 
     if argv[0] == "chat":
         if len(argv) != 2:

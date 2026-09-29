@@ -17,7 +17,7 @@ from tinylab.tokenizer import DEFAULT_MAX_TOKENS_PER_CONVERSATION
 # aware so e.g. "mmlu_epochs" on a kind="base" step is caught as an error rather than silently
 # accepted and ignored. "tokenizer" is already in ops.COMMON_KEYS (every op accepts it -- it's the
 # step's own tokenizer selection, see Context.tokenizer_for), so it isn't repeated here.
-_COMMON_KEYS = {"kind", "dataset", "sequences_per_volume", "buffer_size", "tokenizer_threads"}
+_COMMON_KEYS = {"kind", "dataset", "sequences_per_volume", "buffer_size", "tokenizer_threads", "push"}
 _BASE_KEYS = {"shards"}
 _SFT_KEYS = {"max_conversations", "mmlu_epochs", "gsm8k_epochs", "max_tokens_per_conversation", "sft_padding_id"}
 
@@ -37,6 +37,18 @@ def default_dataset_name(kind: str, sequence_len: int, tokenizer) -> str:
     return f"{stem}_t{sequence_len}_{tokenizer.fingerprint()}"
 
 
+def _make_store(cfg, ctx, dataset_name, dataset_dir):
+    """FileSystemDatasetStore, or -- with a "remote" and "push" (default true) -- one that uploads
+    each shard as it's written and the manifest last."""
+    if ctx.uploader is None or not cfg.get("push", True):
+        return FileSystemDatasetStore(dataset_dir)
+    from tinylab.remote_stores import UploadingDatasetStore
+    spec = cfg.get("tokenizer")
+    inputs = {} if spec and "/" in spec else {"tokenizer": f"tokenizers/{ctx.tokenizer_name_for(spec)}"}
+    return UploadingDatasetStore(dataset_dir, name=dataset_name, uploader=ctx.uploader, producer=ctx.producer(cfg["name"]),
+                                 inputs=inputs, motivation=cfg.get("_comment", ""))
+
+
 def _prepare_base(cfg, ctx, sequence_len, tokenizer):
     """kind="base": ensures cfg["shards"] ClimbMix train shards (plus the fixed val shard) are on
     disk, downloading whatever's missing, then packs exactly those paths -- never however many
@@ -45,7 +57,7 @@ def _prepare_base(cfg, ctx, sequence_len, tokenizer):
     manager = ctx.data_manager
     dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, tokenizer)
     dataset_dir = prepared_dir(dataset_name)
-    store = FileSystemDatasetStore(dataset_dir)
+    store = _make_store(cfg, ctx, dataset_name, dataset_dir)
 
     shards = cfg.get("shards", 8)
     train_paths, val_paths = data.climbmix_train_val_paths(shards)
@@ -101,7 +113,7 @@ def _prepare_sft(cfg, ctx, sequence_len, tokenizer):
     manager = ctx.data_manager
     dataset_name = cfg.get("dataset") or default_dataset_name("sft", sequence_len, tokenizer)
     dataset_dir = prepared_dir(dataset_name)
-    store = FileSystemDatasetStore(dataset_dir)
+    store = _make_store(cfg, ctx, dataset_name, dataset_dir)
 
     train_mixture, val_mixture = _build_sft_mixtures(cfg, ctx)
     print0(f"Preparing SFT dataset {dataset_name!r}: {len(train_mixture):,} train conversations, {len(val_mixture):,} val -> {dataset_dir}")

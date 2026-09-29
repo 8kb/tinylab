@@ -31,13 +31,16 @@ def _load(cfg, ctx):
     meta_data)."""
     assert "model_tag" in cfg, "bench: 'model_tag' is required"
     return checkpoints.load_model(cfg["model_tag"], ctx.device, phase="eval", step=cfg.get("model_step"),
-                                  tokenizer_spec=cfg.get("tokenizer"))
+                                  tokenizer_spec=cfg.get("tokenizer"), remote=ctx.remote)
 
 
 def _run_core(cfg, ctx, model, tokenizer):
     """suite="core": scores model against DCLM's CORE suite, capped at cfg["max_per_task"]
     examples per task if given (must leave enough for each task's own few-shot count -- see
     AGENTS.md). Returns {"op": "bench", "suite": "core", "core_metric", "results"}."""
+    if ctx.remote is not None:
+        from tinylab import remote as remote_mod
+        remote_mod.pull_prefix(ctx.remote, "eval_bundle")  # only files not already local
     report = ctx.bench_manager.core_suite(model, tokenizer, cache_dir=get_base_dir(), max_per_task=cfg.get("max_per_task"),
                                            device=ctx.device, rank=ctx.rank, world_size=ctx.world_size, log=print0)
     for label, acc in report.results.items():
@@ -55,6 +58,9 @@ def _run_chat(cfg, ctx, model, tokenizer):
     change the numbers of any existing job that already sets batch_size. Returns
     {"op": "bench", "suite": "chat", "chatcore_metric", "results"}."""
     from benchcore import build_chat_tasks
+    if ctx.remote is not None:
+        from tinylab import remote as remote_mod
+        remote_mod.pull_prefix(ctx.remote, "task_data")  # bench sets only; SmolTalk is never in the bucket
     task_names = cfg.get("tasks")
     try:
         tasks = build_chat_tasks(task_names, cache_dir=get_base_dir())
