@@ -389,6 +389,13 @@ def run(cfg: dict, ctx) -> dict:
     # (~80s measured for this model/GPU, once, at step 0) -- not worth 4x the wall-clock and $ on
     # every step after it for every real run this host exists to make cheap and unattended.
     orig_model = model
+    # Every train step of a job file shares one process, and dynamo's recompile limit (8) is per code
+    # object, not per model: model.forward and MuonAdamW.step recompile for each step's new model,
+    # for train/eval, for doc_masking on/off. Once the limit is hit dynamo silently stops compiling
+    # and the rest of the process runs eager -- measured on experiment 02: the 5th step of a job ran
+    # at 4x the step time and 1/4 the MFU (canon's K shifted multiply-adds are ~4.5x slower eager,
+    # ~10 ms vs ~2 ms per site). Drop the previous step's compiled code before compiling this one.
+    torch._dynamo.reset()
     model = torch.compile(model, dynamic=False)
 
     optimizer_hparams_kwargs = dict(
