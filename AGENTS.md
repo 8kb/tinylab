@@ -15,8 +15,13 @@ anywhere.)
 All code, comments, docs, commit messages, and any other text committed to git MUST be in English.
 
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
-`[tool.uv.sources]`: `modelcore` `v0.5.0` (`modelcore.v2` configs), `datacore` `v0.3.0`, `benchcore`
+`[tool.uv.sources]`: `modelcore` `v0.12.0` (`modelcore.v3` configs: one `Block` = mixer + features; `short_conv`/`mamba2`/`mamba3` mixers, `canon`/`output_gate` features), `datacore` `v0.3.0`, `benchcore`
 `v0.2.1`.
+
+**Old checkpoints.** A pre-v3 checkpoint (e.g. experiment 01's `local-artifacts/checkpoints`) must go
+through `python -m modelcore.convert SRC DST` before `chat`/`bench` (optimizer state is not
+converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and benchcore: modelcore's
+`Decoder` owns it (covered by `tests/test_arch_smoke.py`).
 
 ## Invariants owned elsewhere
 

@@ -88,7 +88,7 @@ def test_train_then_load_then_generate(base_dir):
     # The checkpoint says which tokenizer it needs, and how it is talked to (a base run keeps the
     # template its model_config named).
     saved = meta["model_config"]
-    assert saved["format"] == "modelcore.v2" and saved["template"] == "base"
+    assert saved["format"] == "modelcore.v3" and saved["template"] == "base"
     assert saved["tokenizer"] == tokenizer.descriptor("default")
     assert saved["tokenizer"]["fingerprint"] == loaded_tokenizer.fingerprint() == meta["tokenizer_fingerprint"]
     model.eval()

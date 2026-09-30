@@ -1,0 +1,93 @@
+{
+  "format": "modelcore.v3",
+  "_comment": "llama-style, 2 attention layers, canon k=4 at pre_mixer+pre_ffn; sequence_len 32, vocab 32768. Built once from modelcore/tests/conftest.py builders and dumped with to_dict() (see tests/test_arch_smoke.py).",
+  "sequence_len": 32,
+  "vocab_size": 32768,
+  "n_embd": 64,
+  "pad_vocab_size_to": 64,
+  "template": "base",
+  "reference": null,
+  "shared": {
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
+    },
+    "rope": {
+      "#type": "rotary",
+      "head_dim": 16,
+      "over_compute": 10
+    }
+  },
+  "input": {
+    "#type": "token_embedding",
+    "smear": false
+  },
+  "body": {
+    "#type": "stack",
+    "blocks": [
+      {
+        "#type": "block",
+        "layer_idx": 0,
+        "mixer": {
+          "#type": "attention",
+          "n_head": 4,
+          "n_kv_head": 4,
+          "head_dim": 16,
+          "window": -1,
+          "kv_slot": 0,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 256
+        },
+        "features": [
+          {
+            "#type": "canon",
+            "kernel_size": 4,
+            "sites": [
+              "pre_mixer",
+              "pre_ffn"
+            ]
+          }
+        ]
+      },
+      {
+        "#type": "block",
+        "layer_idx": 1,
+        "mixer": {
+          "#type": "attention",
+          "n_head": 4,
+          "n_kv_head": 4,
+          "head_dim": 16,
+          "window": -1,
+          "kv_slot": 1,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
+          "#type": "gated_mlp",
+          "activation": "silu",
+          "hidden_dim": 256
+        },
+        "features": [
+          {
+            "#type": "canon",
+            "kernel_size": 4,
+            "sites": [
+              "pre_mixer",
+              "pre_ffn"
+            ]
+          }
+        ]
+      }
+    ],
+    "features": []
+  },
+  "output": {
+    "#type": "lm_head",
+    "softcap": 15
+  }
+}

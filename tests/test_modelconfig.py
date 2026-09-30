@@ -74,7 +74,7 @@ def test_a_v1_model_config_file_still_loads_and_builds_the_same_model(tmp_path):
     v2 = modelconfig.load_model_config(_FIXTURE, sequence_len=32, vocab_size=32768)
     assert ModelManager().validate_config(v1).ok
     assert v1.to_dict() == _without_comments(v2.to_dict())
-    assert [b.params["window"] for b in v1.body.params["blocks"]] == [-1, -1]  # full attention is -1 now
+    assert [b.params["mixer"].params["window"] for b in v1.body.params["blocks"]] == [-1, -1]  # full attention is -1 now
 
 
 def test_comments_in_a_model_config_survive_loading():

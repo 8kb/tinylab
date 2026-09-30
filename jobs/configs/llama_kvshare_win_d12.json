@@ -1,5 +1,5 @@
 {
-  "format": "modelcore.v2",
+  "format": "modelcore.v3",
   "_comment": "Dumped once via nanochat's scripts/model_info.py --arch llama_kvshare_win --depth 12 --aspect-ratio 64 --head-dim 128 --max-seq-len 2048 --vocab-size 32768 --arch-opt kv_share_frac=0.5 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 2048,
   "vocab_size": 32768,
@@ -36,186 +36,247 @@
     "#type": "stack",
     "blocks": [
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 0,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 0,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 0,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 1,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 1,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 1,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 2,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 2,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 2,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 3,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": -1,
-        "kv_slot": 3,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": -1,
+          "kv_slot": 3,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 4,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 4,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 4,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 5,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 5,
-        "produces_kv": true,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 5,
+          "produces_kv": true,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 6,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 7,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": -1,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": -1,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 8,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 9,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 10,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": 512,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": 512,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       },
       {
-        "#type": "plain_block",
+        "#type": "block",
         "layer_idx": 11,
-        "n_head": 6,
-        "n_kv_head": 6,
-        "head_dim": null,
-        "window": -1,
-        "kv_slot": 5,
-        "produces_kv": false,
-        "mlp": {
+        "mixer": {
+          "#type": "attention",
+          "n_head": 6,
+          "n_kv_head": 6,
+          "head_dim": null,
+          "window": -1,
+          "kv_slot": 5,
+          "produces_kv": false,
+          "features": []
+        },
+        "ffn": {
           "#type": "gated_mlp",
           "activation": "silu",
           "hidden_dim": 2048
-        }
+        },
+        "features": []
       }
-    ]
+    ],
+    "features": []
   },
   "output": {
     "#type": "lm_head",

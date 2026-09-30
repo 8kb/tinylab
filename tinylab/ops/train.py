@@ -48,7 +48,7 @@ _COMMON_KEYS = {
     "eval_every", "eval_tokens", "save_every",
     "fp8", "fp8_eval",
     "doc_masking", "doc_masking_max_docs_per_row",
-    "adapter_lr", "adapter_scalar_lr",
+    "adapter_lr", "adapter_scalar_lr", "conv_lr", "ssm_lr",
     "push_model", "push_optim",
 }
 _BASE_KEYS = set()
@@ -410,6 +410,10 @@ def run(cfg: dict, ctx) -> dict:
         optimizer_hparams_kwargs["adapter_lr"] = cfg["adapter_lr"]
     if "adapter_scalar_lr" in cfg:
         optimizer_hparams_kwargs["adapter_scalar_lr"] = cfg["adapter_scalar_lr"]
+    if "conv_lr" in cfg:
+        optimizer_hparams_kwargs["conv_lr"] = cfg["conv_lr"]
+    if "ssm_lr" in cfg:
+        optimizer_hparams_kwargs["ssm_lr"] = cfg["ssm_lr"]
     optimizer = manager.create_optimizer(orig_model, OptimizerHparams(**optimizer_hparams_kwargs))
     if optimizer_state is not None:
         # A true step-resume (ctx.resume, this step's own prior checkpoint): restore exactly, no

@@ -1,0 +1,111 @@
+{
+  "format": "modelcore.v3",
+  "_comment": "gpt-style, 2 layers, headwise output_gate on attention; sequence_len 32, vocab 32768. Built once from modelcore/tests/conftest.py builders and dumped with to_dict() (see tests/test_arch_smoke.py).",
+  "sequence_len": 32,
+  "vocab_size": 32768,
+  "n_embd": 64,
+  "pad_vocab_size_to": 64,
+  "template": "base",
+  "reference": null,
+  "shared": {
+    "rope": {
+      "#type": "rotary",
+      "head_dim": 16,
+      "over_compute": 10
+    },
+    "norm": {
+      "#type": "rms_norm",
+      "eps": null
+    }
+  },
+  "input": {
+    "#type": "token_embedding",
+    "smear": true
+  },
+  "body": {
+    "#type": "stack",
+    "blocks": [
+      {
+        "#type": "block",
+        "layer_idx": 0,
+        "mixer": {
+          "#type": "attention",
+          "n_head": 4,
+          "n_kv_head": 4,
+          "head_dim": 16,
+          "window": -1,
+          "kv_slot": null,
+          "produces_kv": true,
+          "features": [
+            {
+              "#type": "output_gate",
+              "granularity": "head",
+              "block_size": null,
+              "in_channels": null
+            }
+          ]
+        },
+        "ffn": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 256
+        },
+        "features": [
+          {
+            "#type": "resid_lambdas",
+            "resid_lambda_init": 1.15,
+            "x0_lambda_init": 0.2
+          }
+        ]
+      },
+      {
+        "#type": "block",
+        "layer_idx": 1,
+        "mixer": {
+          "#type": "attention",
+          "n_head": 4,
+          "n_kv_head": 4,
+          "head_dim": 16,
+          "window": -1,
+          "kv_slot": null,
+          "produces_kv": true,
+          "features": [
+            {
+              "#type": "value_embed",
+              "gate_channels": 12
+            },
+            {
+              "#type": "output_gate",
+              "granularity": "head",
+              "block_size": null,
+              "in_channels": null
+            }
+          ]
+        },
+        "ffn": {
+          "#type": "mlp",
+          "activation": "relu2",
+          "hidden_dim": 256
+        },
+        "features": [
+          {
+            "#type": "resid_lambdas",
+            "resid_lambda_init": 1.0499999999999998,
+            "x0_lambda_init": 0.05000000000000002
+          }
+        ]
+      }
+    ],
+    "features": [
+      {
+        "#type": "backout",
+        "backout_layer": 1,
+        "backout_lambda_init": 0.2
+      }
+    ]
+  },
+  "output": {
+    "#type": "lm_head",
+    "softcap": 15
+  }
+}

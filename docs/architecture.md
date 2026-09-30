@@ -280,7 +280,7 @@ materialized tree this checkpoint was built from), `user_config` (the resolved j
 `"model_config"` — that would just duplicate the sibling `model_config` key under a different,
 unresolved shape), `device_batch_size`, `max_seq_len`, `total_batch_size`, `dataloader_state_dict`
 (a datacore resume cursor -- see "Resume" above), `total_training_time`, and for SFT checkpoints,
-`base_model_tag`/`base_model_step`. `model_config` is a `modelcore.v2` tree, including its `template`
+`base_model_tag`/`base_model_step`. `model_config` is a `modelcore.v3` tree, including its `template`
 and `tokenizer` blocks. `tinylab.checkpoints.build_model` cross-checks
 `tokenizer_fingerprint` against the currently-loaded tokenizer before returning a model — a vocab-
 size match alone isn't enough to prove two tokenizers assign ids the same way.
