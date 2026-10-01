@@ -5,13 +5,15 @@ subsystem's begins.
 
 ```
 tinylab/
-  __main__.py           the CLI: parses argv, dispatches to job.run_file or chat.main
+  __main__.py           the CLI: parses argv, dispatches to job.run_file, chat.main, info.main or remote_cli
   job.py                loads a job file, deep-merges "defaults", validates keys, runs steps in order
   runtime.py             base dir, device/DDP init, print0
   tokenizer.py           RustBPETokenizer: BPE encode/decode, special tokens, conversation rendering
   default_tokenizer/     committed tokenizer.pkl + token_bytes.pt (a fixed, pre-trained vocab)
   modelconfig.py          loads + validates a materialized modelcore.ModelConfig tree (no
-                          preset/depth-dial derivation -- that's nanochat's job, see below)
+                          preset/depth-dial derivation -- that's llmllab/tools/, see below)
+  info.py                 `python -m tinylab info`: read-only params/FLOPs/KV/plan report for a
+                          config file or a checkpoint tag (meta only, no weights)
   checkpoints.py         checkpoint tag/step naming over modelcore's FileSystemStore
   remote.py              the HF bucket: Remote/Uploader/Prefetcher, push/pull rules (docs/remote.md)
   remote_stores.py       datacore DatasetStore wrappers that upload / stream shards
@@ -24,14 +26,15 @@ tinylab/
     __init__.py            OPS registry + Context (device/managers, resume flag, passed explicitly)
     prepare.py              op: prepare
     train.py                op: train (kind base|sft, one shared loop)
-    bench.py                op: bench (suite core|chat)
+    bench.py                op: bench (suite core|chat|bpb|sample|infer|tokenizer)
+    rl.py                    op: rl -- REINFORCE on GSM8K from an sft checkpoint
     tokenizer.py             op: tokenizer -- trains a fresh BPE vocab
 jobs/
   smoke.json              tiny end-to-end pipeline, runs on a laptop in minutes
   speedrun.json            real-scale template for a multi-GPU pod
-  contest.json             two-architecture comparison, matching nanochat's runs/contest_d12.sh
-  configs/                 materialized ModelConfig trees the job files above point at, dumped by
-                          nanochat's scripts/model_info.py --dump-config (see AGENTS.md)
+  contest.json             two-architecture comparison (nanochat's former runs/contest_d12.sh rows)
+  configs/                 materialized ModelConfig trees the job files above point at, generated
+                          by llmllab/tools/make_config.py (see AGENTS.md)
 ```
 
 ## From a job file to a run
@@ -137,7 +140,7 @@ the job state file — see "Resume: the job state file" above.
 - **`modelcore.ModelManager`** creates, loads, and saves models and optimizers, and computes their
   FLOPs/param/KV-cache stats. `tinylab.modelconfig` loads and validates the materialized
   `ModelConfig` tree a job file's `"model_config"` names — tinylab has no depth-dial layer of its
-  own; the tree is produced entirely by nanochat's `scripts/model_info.py --dump-config` (or hand-
+  own; the tree is produced entirely by `llmllab/tools/make_config.py` (or hand-
   written) before it ever reaches tinylab. modelcore itself never sees a depth dial either way,
   only the resolved tree.
 - **`datacore.DataManager`** prepares a raw corpus into a packed, on-disk dataset and reads it back
@@ -154,7 +157,7 @@ the job state file — see "Resume: the job state file" above.
   passes a real `Engine`, so setting the job key `generative_batch_size` above `1` is what turns
   batching on for GSM8K/HumanEval — identical results at `temperature: 0`, and the point of it:
   uncapped GSM8K (~1319 problems) and HumanEval (~164) one-at-a-time can cost more than training
-  the model did (see `nanochat/docs/contest.md`'s Stage notes on `chat_eval`'s `-B` flag, the same
+  the model did (see `llmllab/docs/history.md`'s Stage notes on `chat_eval`'s `-B` flag, the same
   mechanism this ports).
 - **`tinylab.checkpoints`** owns tag/step naming and `meta.json`'s extra fields on top of
   `modelcore.store.FileSystemStore`, which owns the actual model/optimizer artifact format.
@@ -289,7 +292,7 @@ size match alone isn't enough to prove two tokenizers assign ids the same way.
 
 `tinylab.presets` (a `"depth"` dial → concrete `ModelConfig` tree, one preset registered) is gone.
 `tinylab.modelconfig` replaced it: a job file's `"model_config"` names a path to an already-
-materialized tree — produced by nanochat's `scripts/model_info.py --dump-config`, since that's
+materialized tree — produced by `llmllab/tools/make_config.py`, since that's
 where the preset registry and the depth-dial derivation rules (`mup_dims`, `compute_window_sizes`,
 `gpt_lambda_schedule`, …) actually live. This isn't scope-trimming, it's the same rule
 `modelcore/AGENTS.md` states for its own tree — "a config tree carries only concrete,
@@ -300,8 +303,10 @@ The same rule removed `modelcore.scaling.derive_training_plan` from `tinylab.ops
 `target_flops`/`target_param_data_ratio` and the muP batch-size/weight-decay corrections they fed
 are gone along with the reference-model machinery (`resolve_reference_config`,
 `d_ref_scaling_params`) that made them work. `total_batch_size`, `num_iterations` (for `kind:
-base`), and `eval_tokens` are now required job-file keys — compute them with nanochat's
-`scripts/model_info.py --target-flops=... --json` and paste the numbers in. `world_size` is a new
+base`), and `eval_tokens` are now required job-file keys — compute them with
+`python -m tinylab info <config> --target-flops=... --json` (the one place the plan math runs
+here: a report that reads `modelcore.scaling.derive_training_plan`, never written into a job file)
+and paste the numbers in. `world_size` is a new
 required key for the same reason: a job file fixes the GPU count a run assumes (its
 `total_batch_size`/grad-accum arithmetic depends on it), checked against the actual launch rather
 than inferred from it. The literal defaults that remain (`matrix_lr: 0.02`, `warmup_steps: 5`, …)
@@ -309,28 +314,30 @@ are concrete values, not rules, and stay.
 
 ## What tinylab deliberately doesn't do
 
-tinylab is the minimal host: one job file, five things it can do. Relative to `nanochat` (the
-architecture-playground host built on the same three subsystems), tinylab now has fp8, doc-masking,
+tinylab is the minimal host: one job file, six things it can do. Relative to `nanochat` (the
+archived architecture-playground host that preceded it), tinylab has fp8, doc-masking,
 LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
 adapter-override keys), periodic checkpointing and resume (`"save_every"`, `--resume` — see
 "Resume: the job state file" above), tokenizer training (the `tokenizer` op), and `torch.compile`
 in its own training loop (see "Why the training loop is compiled" below), but still no wandb
 logging, no fp16 `GradScaler`, and no mid-training CORE/sample eval (only periodic val-bpb). None of
-these are bugs — they're `nanochat`'s job, not tinylab's; adding one back means porting it the same
-way everything else here was ported, not inventing it fresh.
+these are bugs — they were left behind in the archived nanochat; adding one back means porting it
+the same way everything else here was ported, not inventing it fresh. What was ported late, when
+nanochat was retired: the `rl` op, the `bpb`/`sample`/`infer`/`tokenizer` bench suites, and the
+`info` inspector (see `llmllab/docs/history.md`).
 
 ## What one job file still can't replace: `runs/contest_d12.sh`
 
-`jobs/contest.json` runs a two-architecture comparison (matching nanochat's
-`runs/contest_d12.sh` rows) as one tinylab pipeline — every architecture nanochat can dump is now
-reachable, which presets never allowed. It is not a drop-in replacement for the shell driver,
+`jobs/contest.json` runs a two-architecture comparison (matching the archived nanochat's
+`runs/contest_d12.sh` rows) as one tinylab pipeline — every architecture `make_config.py` can
+generate (or anyone can write by hand) is reachable, which presets never allowed. It is not a drop-in replacement for the shell driver,
 though:
 
 - **No row matrix/sweep.** N architectures means N × 4 hand-written steps (prepare is shared, but
   each architecture needs its own base-train, sft-train, and two bench steps). There is no
   sweep/matrix/foreach construct anywhere in the job-file schema.
 - **No preflight budget.** `--dry-run` only echoes resolved step JSON — no GPU-hours/cost estimate.
-  Run nanochat's `scripts/model_info.py --json` per architecture before spending.
+  Run `python -m tinylab info <config> --gpu ... --json` per architecture before spending.
 - **No results aggregation.** Each op returns a dict `job.run_file` prints as one JSON line; there
   is no `results.csv`, no joined comparison table.
 
@@ -355,9 +362,7 @@ stall inside a cold compiled-kernel cache the first time it runs in a fresh envi
 once-per-environment behavior on some backends, not a bug). Reversed after a real measurement on
 experiment 01 (`llmllab/experiments/01-ffn-width-vs-heads`, 1x H200 SXM, d12 GPT, fp8): the eager
 loop measured ~11% MFU (3.67s/step) against a documented ~40% planning assumption; adding the
-compile call raised it to ~47% MFU (0.86s/step steady-state) -- a 4.27x speedup, consistent with
-`nanochat/docs/contest.md`'s own eager-vs-compiled numbers (its eager run is called "crippled
-mode" in that doc's own words). The stall is real but one-time and bounded (~80s measured for this
+compile call raised it to ~47% MFU (0.86s/step steady-state) -- a 4.27x speedup. The stall is real but one-time and bounded (~80s measured for this
 model/GPU, once, at step 0) -- not worth paying roughly 4x the wall-clock and $ on every subsequent
 step, on every real run this host exists to make cheap and unattended, to avoid it. `pytest`'s own
 CPU run pays a version of this cost too (Inductor's CPU backend, not CUDA-specific), but only once
@@ -369,10 +374,10 @@ tests.
 ## Where things come from
 
 `tokenizer.py`, `checkpoints.py`, `engine.py`, `chat.py`, `data.py`, `runtime.py`, and
-`ops/{prepare,train,bench,tokenizer}.py` are each ported from a corresponding file in
+`info.py` and `ops/{prepare,train,bench,tokenizer,rl}.py` are each ported from a corresponding file in
 [`nanochat`](https://github.com/8kb/nanochat) (see each module's own docstring for exactly which
-one) and trimmed to what a job-file-driven pipeline needs — `nanochat` is a virtual uv project (no
-`[build-system]`) and can't be a real dependency, so this is a port, not an import.
+one) and trimmed to what a job-file-driven pipeline needs — `nanochat` (now archived) was a virtual
+uv project (no `[build-system]`) and could never be a real dependency, so this is a port, not an import.
 `tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping in.
 `tokenizer.py`'s `train_from_iterator`/`save` (via `ops/tokenizer.py`) are the one place this repo
 now depends on `rustbpe` directly, same as nanochat's own `scripts/tok_train.py` does.

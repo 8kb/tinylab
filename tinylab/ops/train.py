@@ -8,8 +8,8 @@ Carries no derivation rule of its own: every horizon/batch-size/LR-scale number 
 scaling-law math (target_flops, target_param_data_ratio, the muP batch-size/weight-decay
 corrections) used to compute is now a required job-file key instead -- see AGENTS.md's "a config
 tree carries only concrete, already-decided values, never a derivation rule" invariant, which now
-covers the whole job file. Compute the removed numbers with nanochat's own
-`scripts/model_info.py --target-flops=... --json` and paste the result in.
+covers the whole job file. Compute the removed numbers with
+`python -m tinylab info <config> --target-flops=... --json` and paste the result in.
 
 Resume (ctx.resume, set by `python -m tinylab ... --resume`, never a job-file key -- see
 tinylab.job) is a run-level fact, not a pipeline fact: when it's set, a step first checks whether
@@ -160,14 +160,14 @@ def run(cfg: dict, ctx) -> dict:
     sequence_len = cfg["sequence_len"]
     assert "total_batch_size" in cfg, (
         "train: 'total_batch_size' is required -- tinylab derives no scaling law of its own; "
-        "compute it with nanochat's scripts/model_info.py --json and paste the number in."
+        "compute it with `python -m tinylab info <config> --json` and paste the number in."
     )
     assert "eval_tokens" in cfg, "train: 'eval_tokens' is required"
     if kind == "base":
         assert "num_iterations" in cfg, (
             "train: 'num_iterations' is required for kind='base' -- tinylab derives no training "
-            "horizon of its own; compute it with nanochat's scripts/model_info.py --target-flops=... "
-            "--json (training_plan.num_iterations) and paste the number in."
+            "horizon of its own; compute it with `python -m tinylab info <config> "
+            "--target-flops=... --json` (training_plan.num_iterations) and paste the number in."
         )
     assert "world_size" in cfg, (
         "train: 'world_size' is required -- the job file fixes the GPU count for a run; edit it "
@@ -282,7 +282,7 @@ def run(cfg: dict, ctx) -> dict:
         if kind == "base":
             assert "model_config" in cfg, (
                 'train (kind=base): "model_config" is required -- a path to a materialized '
-                "ModelConfig tree (see nanochat's scripts/model_info.py --dump-config)."
+                "ModelConfig tree (see llmllab/tools/make_config.py)."
             )
             real_config = modelconfig.load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
             num_iterations = cfg["num_iterations"]

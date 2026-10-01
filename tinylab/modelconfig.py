@@ -2,10 +2,10 @@
 Loading and validating the "model_config" job-file key -- a path to a materialized
 modelcore.ModelConfig tree, never a depth dial. tinylab does no preset/depth-dial derivation of
 its own: that logic (mup_dims, compute_window_sizes, gpt_lambda_schedule, and the PRESETS registry
-itself) belongs to nanochat, the architecture playground -- its `scripts/model_info.py
---dump-config` is what produces the file this module loads. See AGENTS.md: "a config tree carries
-only concrete, already-decided values, never a derivation rule" now applies to the whole job file,
-not just modelcore's own tree, and a preset is exactly a derivation rule.
+itself) lives in llmllab/tools/ -- its make_config.py is what produces the file this module loads.
+See AGENTS.md: "a config tree carries only concrete, already-decided values, never a derivation
+rule" applies to the whole job file, not just modelcore's own tree, and a preset is exactly a
+derivation rule.
 """
 import json
 
@@ -21,12 +21,12 @@ def load_model_config(path: str, *, sequence_len: int, vocab_size: int) -> Model
     with open(path, "r", encoding="utf-8") as f:
         config = ModelConfig.from_dict(json.load(f))
     assert config.sequence_len == sequence_len, (
-        f'"model_config" {path!r} was dumped at sequence_len={config.sequence_len}, but this '
+        f'"model_config" {path!r} was generated at sequence_len={config.sequence_len}, but this '
         f'step\'s own "sequence_len" is {sequence_len} -- re-dump the config at the right length '
-        f'(nanochat: scripts/model_info.py --max-seq-len={sequence_len} --dump-config).'
+        f'(llmllab/tools/make_config.py --max-seq-len {sequence_len}).'
     )
     assert config.vocab_size == vocab_size, (
-        f'"model_config" {path!r} was dumped at vocab_size={config.vocab_size}, but the local '
+        f'"model_config" {path!r} was generated at vocab_size={config.vocab_size}, but the local '
         f'tokenizer\'s vocab size is {vocab_size} -- both must come from the same tokenizer.'
     )
     return config

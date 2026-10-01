@@ -19,8 +19,8 @@ from tinylab.ops.train import run as train_run
 from tinylab.tokenizer import get_tokenizer
 
 # A materialized 2-layer gpt tree at sequence_len=32, vocab_size=32768 (the bundled default
-# tokenizer's own vocab size) -- dumped once via nanochat's `scripts/model_info.py --arch gpt
-# --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768 --dump-config`.
+# tokenizer's own vocab size) -- generated once via llmllab/tools/make_config.py --arch gpt
+# --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768.
 # tinylab does no preset/depth-dial derivation of its own any more -- see AGENTS.md.
 _TINY_GPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
 

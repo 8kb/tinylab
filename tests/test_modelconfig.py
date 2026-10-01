@@ -1,5 +1,5 @@
 """Tests for tinylab.modelconfig: loading and validating a materialized ModelConfig tree dumped
-by nanochat's scripts/model_info.py --dump-config. No preset/depth-dial derivation happens here
+by llmllab/tools/make_config.py. No preset/depth-dial derivation happens here
 any more -- see AGENTS.md."""
 import json
 import os

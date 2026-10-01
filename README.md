@@ -23,9 +23,14 @@ cd tinylab && uv sync --extra cpu --group dev
 ```
 python -m tinylab <job.json> [--only NAME] [--dry-run] [--resume]   # run a pipeline
 python -m tinylab chat <job.json>                                   # talk to what it trained
+python -m tinylab info <config.json | tag> [--target-flops X ...]   # params/FLOPs/training-plan report
 ```
 
-That's it — two commands, no other flags beyond these three. `--only NAME` re-runs one named step
+That's it — three commands (plus `remote`, see [`docs/remote.md`](docs/remote.md)); the pipeline
+takes no flags beyond these three. `info` is a read-only inspector: it reports a model config's (or
+a trained checkpoint's) parameters, FLOPs and KV-cache bytes, and the training plan a compute
+target implies, so you can paste `total_batch_size`/`num_iterations` into a job file.
+A pipeline's steps are `prepare`, `train`, `bench`, `tokenizer` and `rl`. `--only NAME` re-runs one named step
 on its own (useful once that step's inputs, like a prepared dataset or an earlier checkpoint,
 already exist on disk). `--dry-run` validates the file and prints every step's fully resolved
 config without touching disk, the network, or a GPU. `--resume` continues a previous, interrupted
@@ -69,8 +74,8 @@ point is to prove the plumbing works end to end, not to produce something worth 
 ```
 
 `"model_config"` names a materialized `modelcore.ModelConfig` tree — tinylab does no preset/
-depth-dial derivation of its own; dump one with nanochat's `scripts/model_info.py --dump-config`
-(see `jobs/configs/`). This is (a trimmed copy of) `jobs/smoke.json` — a real, runnable pipeline.
+depth-dial derivation of its own; generate one with `llmllab/tools/make_config.py` (see
+`jobs/configs/`) and inspect it with `python -m tinylab info`. This is (a trimmed copy of) `jobs/smoke.json` — a real, runnable pipeline.
 `jobs/speedrun.json` is the same shape at production scale, meant for a GPU pod; `jobs/contest.json`
 compares two architectures in one pipeline.
 

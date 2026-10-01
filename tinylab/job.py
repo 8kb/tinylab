@@ -311,7 +311,7 @@ def _needs_write(steps: list[dict]) -> bool:
     for step in steps:
         if step["op"] in ("prepare", "tokenizer") and step.get("push", True):
             return True
-        if step["op"] == "train" and (step.get("push_model", "last") != "none" or step.get("push_optim", "last") != "none"):
+        if step["op"] in ("train", "rl") and (step.get("push_model", "last") != "none" or step.get("push_optim", "last") != "none"):
             return True
     return False
 

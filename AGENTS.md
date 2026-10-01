@@ -30,10 +30,12 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   is no `presets.py` here (deleted — depth-dial derivation, muP scaling-law horizon/batch-size/LR
   math, all of it) and never will be. A job file's `"model_config"` names a path to an
   already-materialized tree; every number tinylab used to derive (`total_batch_size`,
-  `num_iterations`, …) is a required key instead. Presets and the training-plan math still exist —
-  they're nanochat's job (`nanochat/architectures/`, `modelcore.scaling`), not tinylab's. Compute a
-  number with nanochat's `scripts/model_info.py --dump-config` / `--target-flops=... --json` and
-  paste it into the job file; don't add a derivation rule back into tinylab to avoid that step. See
+  `num_iterations`, …) is a required key instead. Presets and the training-plan math still exist
+  — they live outside tinylab (`llmllab/tools/` for the depth dial, `modelcore.scaling` for the
+  plan). Generate a config with `llmllab/tools/make_config.py`, compute a plan number with
+  `python -m tinylab info <config> --target-flops ... --json` (a *report*, never written into a
+  job file by tinylab) and paste it into the job file; don't add a derivation rule back into
+  tinylab to avoid that step. See
   [modelcore/AGENTS.md](https://github.com/8kb/modelcore/blob/main/AGENTS.md) and
   [docs/architecture.md](docs/architecture.md#no-derivation-rules-not-just-no-depth-dial).
 - **Optimizer state is checkpointed and reloaded positionally** — the role-order
@@ -48,14 +50,13 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
 
 ## Invariants that will bite you (tinylab's own)
 
-- **`nanochat` cannot be a real dependency.** It's a *virtual* uv project (no `[build-system]` in
-  its `pyproject.toml`), so it's never built or installable. Everything tinylab needs from it is
-  **ported, not imported** — each ported file's docstring names its origin.
+- **`nanochat` is archived and cannot be imported.** tinylab's code was **ported** from it — each
+  ported file's docstring names its origin; the history is in `llmllab/docs/history.md`.
   `tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping
-  in.
+  in (a stale checkout on `PYTHONPATH` would silently work).
 - **tinylab keeps its own cache directory**, `~/.cache/tinylab/` (`TINYLAB_BASE_DIR` to override) —
-  separate from nanochat's, even though the ported tokenizer produces identical token ids. A
-  prepared dataset, checkpoint, or downloaded shard from one is never read by the other.
+  not nanochat's old `~/.cache/nanochat/`, even though the ported tokenizer produces identical
+  token ids. Nothing in there is read from the old cache.
 - **An unrecognized job-file key is a hard error, with a close-match suggestion when there is
   one.** `prepare`/`train`/`bench` each accept a different key set depending on their step's own `"kind"`/`"suite"` (see
   each module's `accepted_keys(cfg)`), so a key that's real for one kind but nonsensical for
@@ -137,7 +138,9 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   longer share a tag (nanochat's `d12`-for-both convention), so an sft step with `output_tag ==
   source_tag` is refused. Don't reintroduce a per-kind directory to get that back — put the kind in
   the tag (`gpt-d12-base` / `gpt-d12-chat`).
-- **A `kind: sft` checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
+- **A `kind: sft` (or `rl`) checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
+  An `rl` checkpoint also writes `"kind": "rl"` into its meta, and its `step` counts completed
+  optimizer updates.
   Declarative only until modelcore validates templates against the tokenizer's special tokens.
 - **A fresh `kind: sft` step warm-starts its optimizer from `source_tag`'s own checkpoint by
   default** (`"load_optimizer"`, default `true`) — momentum/`exp_avg` buffers only, LRs reset

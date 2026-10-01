@@ -167,11 +167,12 @@ class Context:
 COMMON_KEYS = {"device", "sequence_len", "model_config", "world_size", "tokenizer", "experiment", "remote"}
 
 
-from tinylab.ops import prepare, train, bench, tokenizer  # noqa: E402 -- after Context, to avoid a cycle
+from tinylab.ops import prepare, train, bench, tokenizer, rl  # noqa: E402 -- after Context, to avoid a cycle
 
 OPS = {
     "prepare": prepare,
     "train": train,
     "bench": bench,
     "tokenizer": tokenizer,
+    "rl": rl,
 }
