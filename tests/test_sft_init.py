@@ -1,6 +1,6 @@
 """
-`kind="sft"`'s two nanochat-ported mechanisms tinylab.ops.train used to be missing entirely --
-`init_lr_frac` and the `load_optimizer` momentum warm-start (see nanochat/scripts/chat_sft.py's
+`kind="sft"`'s two mechanisms ported from our nanochat fork tinylab.ops.train used to be missing entirely --
+`init_lr_frac` and the `load_optimizer` momentum warm-start (see our nanochat fork's scripts/chat_sft.py's
 own `--init-lr-frac`/`--load-optimizer`, and this repo's docs/job-file.md `## train` table). Real
 (tiny) CPU training, same synthetic-corpus pattern as test_resume.py/test_smoke.py -- no mocks of
 the mechanism itself.

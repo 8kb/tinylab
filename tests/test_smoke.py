@@ -127,7 +127,7 @@ def test_sft_step_reads_one_tag_writes_another_and_declares_the_chat_template(ba
 
 def test_sft_step_may_not_write_into_its_own_source_tag(base_dir):
     """One namespace means a base and an sft checkpoint can no longer share a tag by living in
-    different directories (nanochat reuses "d12" for both) -- refuse before touching anything."""
+    different directories (our nanochat fork reused "d12" for both) -- refuse before touching anything."""
     cfg = {"name": "chat", "op": "train", "kind": "sft", "sequence_len": 32, "total_batch_size": 64, "eval_tokens": 64,
            "world_size": 1, "source_tag": "d12", "output_tag": "d12"}
     with pytest.raises(AssertionError, match="output_tag == source_tag"):
