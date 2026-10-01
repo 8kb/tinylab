@@ -21,8 +21,7 @@ import signal
 import warnings
 from contextlib import contextmanager
 
-from modelcore import ModelManager
-from modelcore.generate import ToolSpec, collect_batch, collect_batch_multi, generate_with_tools
+from modelcore import ModelManager, ToolSpec, collect_batch, collect_batch_multi, generate_with_tools
 
 # Shared with tinylab.ops.bench and tinylab.chat, both of which decode through this Engine --
 # one literal each, not two independent copies of the same number (the pattern tinylab.tokenizer's

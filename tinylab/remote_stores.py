@@ -20,7 +20,7 @@ class UploadingDatasetStore(FileSystemDatasetStore):
     def __init__(self, dataset_dir: str, *, name: str, uploader, producer: dict, inputs: dict | None = None,
                  motivation: str = "", force: bool = False):
         super().__init__(dataset_dir)
-        self.entity = f"prepared/{name}"
+        self.entity = f"{remote_mod.PREPARED}/{name}"
         self._uploader, self._producer, self._inputs = uploader, producer, inputs or {}
         self._motivation, self._force = motivation, force
         self._listing: dict | None = None
@@ -69,7 +69,7 @@ class PrefetchingDatasetStore(FileSystemDatasetStore):
 
     def __init__(self, dataset_dir: str, *, name: str, remote, lookahead: int = 2):
         super().__init__(dataset_dir)
-        self.entity = f"prepared/{name}"
+        self.entity = f"{remote_mod.PREPARED}/{name}"
         self._remote, self._lookahead = remote, lookahead
         self._prefetcher = None
 

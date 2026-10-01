@@ -92,9 +92,8 @@ class RustBPETokenizer:
 
     def save(self, tokenizer_dir):
         """The from_directory-loadable half of train_from_iterator's output -- only self.enc (the
-        tiktoken.Encoding) is pickled, same as our nanochat fork's own save(). Doesn't write token_bytes.pt
-        -- that's tinylab.ops.tokenizer's job, since it's derived from this tokenizer via
-        token_byte_lengths(), not part of the tokenizer's own on-disk identity."""
+        tiktoken.Encoding) is pickled. The per-token byte lengths are not stored: datacore persists
+        them with each prepared dataset, from token_byte_lengths()."""
         os.makedirs(tokenizer_dir, exist_ok=True)
         pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
         with open(pickle_path, "wb") as f:
@@ -268,11 +267,22 @@ class RustBPETokenizer:
 # tinylab-specific convenience functions
 
 def _bundled_default_tokenizer_dir():
-    """The path to tinylab's own committed default_tokenizer/ (tokenizer.pkl + token_bytes.pt),
-    ported byte-for-byte from our nanochat fork's default_tokenizer/ -- so a fresh tinylab checkout
+    """The path to tinylab's own committed default_tokenizer/ (tokenizer.pkl), ported byte-for-byte from our nanochat fork's default_tokenizer/ -- so a fresh tinylab checkout
     can train/chat immediately with no tok_train step, and produces token ids identical to
     our nanochat fork's own default tokenizer."""
     return str(resources.files("tinylab") / "default_tokenizer")
+
+
+def is_path_spec(spec) -> bool:
+    """True if a job's "tokenizer" value is a path (it contains a separator) rather than a bare name."""
+    return isinstance(spec, str) and ("/" in spec or os.sep in spec)
+
+
+def bucket_entity(spec, name) -> "str | None":
+    """The bucket entity (`tokenizers/<name>`) a step's tokenizer lives under, or None for a path-form
+    tokenizer, which is not a bucket entity (it is a directory somewhere on disk). `name` is what
+    Context.tokenizer_name_for(spec) says."""
+    return None if is_path_spec(spec) else f"{TOKENIZERS_DIR}/{name}"
 
 
 def resolve_tokenizer_dir(spec=None, *, base_dir=None):
@@ -285,7 +295,7 @@ def resolve_tokenizer_dir(spec=None, *, base_dir=None):
         spec = DEFAULT_TOKENIZER_NAME
     if not isinstance(spec, str) or not spec.strip():
         raise ValueError(f"tokenizer must be a non-empty name or path, got {spec!r}")
-    if "/" in spec or os.sep in spec:
+    if is_path_spec(spec):
         return os.path.abspath(os.path.expanduser(spec))
     if spec in (".", "..") or "\0" in spec:
         raise ValueError(f"tokenizer name {spec!r} is not a valid directory name")
@@ -304,7 +314,7 @@ def get_tokenizer(base_dir=None, tokenizer=None, remote=None):
     tokenizer_dir = resolve_tokenizer_dir(tokenizer, base_dir=base_dir)
     pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
     if (remote is not None and not os.path.exists(pickle_path) and isinstance(tokenizer, str)
-            and tokenizer != DEFAULT_TOKENIZER_NAME and "/" not in tokenizer and os.sep not in tokenizer):
+            and tokenizer != DEFAULT_TOKENIZER_NAME and not is_path_spec(tokenizer)):
         from tinylab import remote as remote_mod
         try:
             remote_mod.pull_tokenizer(remote, tokenizer, base_dir=base_dir)
@@ -320,7 +330,4 @@ def get_tokenizer(base_dir=None, tokenizer=None, remote=None):
         os.makedirs(tokenizer_dir, exist_ok=True)
         bundled_dir = _bundled_default_tokenizer_dir()
         shutil.copy(os.path.join(bundled_dir, "tokenizer.pkl"), pickle_path)
-        token_bytes_src = os.path.join(bundled_dir, "token_bytes.pt")
-        if os.path.exists(token_bytes_src):
-            shutil.copy(token_bytes_src, os.path.join(tokenizer_dir, "token_bytes.pt"))
     return RustBPETokenizer.from_directory(tokenizer_dir)

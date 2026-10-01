@@ -13,34 +13,39 @@ completions per problem through tinylab.engine.Engine, scores them with benchcor
 (1.0 if the final answer is right), and takes one optimizer step on sum(logp * advantage) over the
 sampled, non-forced tokens. The LR ramps linearly down to zero over the run.
 
-Reuses train.py's plumbing: one checkpoint namespace (output_tag, kind="rl" in the meta, template
-stamped "nanochat" like sft), the optimizer saved with each checkpoint, and step-level resume
-(ctx.resume): a resumed run reloads model + optimizer, checks world_size, and continues the
-deterministic example/seed schedule from where it stopped. Unlike train, no dataset has to be
+Shares train's plumbing (checkpoints.py): one checkpoint namespace (output_tag, kind="rl" in the
+meta, the chat template stamped like sft), the optimizer saved with each checkpoint, and step-level
+resume: a resumed run reloads model + optimizer, checks world_size, and continues the deterministic
+example/seed schedule from where it stopped. Unlike train, no dataset has to be
 prepared: the problems come from benchcore.GSM8K (cached under the base dir; pulled from the
 bucket's task_data/ when a "remote" is set). Not exercised with adapters ("model_config" override)
-beyond the same wiring sft has -- as in nanochat.
+beyond the same wiring sft has.
 """
-import dataclasses
-import hashlib
 import itertools
-import json
 import time
 
 import torch
-
-from modelcore import OptimizerHparams
 
 from tinylab import checkpoints, modelconfig
 from tinylab import remote as remote_mod
 from tinylab.engine import DEFAULT_MAX_NEW_TOKENS, DEFAULT_TOP_K, Engine
 from tinylab.runtime import get_base_dir, print0
+from tinylab.tokenizer import bucket_entity
 
 _KEYS = {
     "source_tag", "source_step", "output_tag", "num_epochs", "num_iterations", "examples_per_step", "num_samples", "device_batch_size",
-    "max_new_tokens", "temperature", "top_k", "embedding_lr", "unembedding_lr", "matrix_lr", "weight_decay",
-    "init_lr_frac", "adapter_lr", "adapter_scalar_lr", "eval_every", "eval_examples", "save_every",
+    "max_new_tokens", "temperature", "top_k", "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr", "weight_decay",
+    "init_lr_frac", "adapter_lr", "adapter_scalar_lr", "conv_lr", "ssm_lr", "eval_every", "eval_examples", "save_every",
     "push_model", "push_optim",
+}
+
+# Every default this op applies, in one place (docs/job-file.md documents them). The LR dials are
+# smaller than train's: rl fine-tunes an already-sft'd model, and init_lr_frac then scales them down
+# again before the linear ramp to zero.
+DEFAULTS = {
+    "num_epochs": 1, "examples_per_step": 16, "num_samples": 16, "device_batch_size": 8, "temperature": 1.0,
+    "eval_every": 60, "eval_examples": 400, "save_every": 60, "init_lr_frac": 0.05,
+    "unembedding_lr": 0.004, "embedding_lr": 0.2, "matrix_lr": 0.02, "scalar_lr": 0.5, "weight_decay": 0.0,
 }
 
 
@@ -52,7 +57,7 @@ def _gsm8k_tasks(ctx):
     """(train task, val task): GSM8K "main", train and test splits."""
     from benchcore import GSM8K
     if ctx.remote is not None:
-        remote_mod.pull_prefix(ctx.remote, "task_data")
+        remote_mod.pull_prefix(ctx.remote, remote_mod.TASK_DATA)
     return (GSM8K(subset="main", split="train", cache_dir=get_base_dir()),
             GSM8K(subset="main", split="test", cache_dir=get_base_dir()))
 
@@ -140,20 +145,21 @@ def run(cfg: dict, ctx) -> dict:
     tokenizer = ctx.tokenizer_for(tokenizer_spec)
     device = ctx.device
     ddp_rank, ddp_world_size = ctx.rank, ctx.world_size
+    defaults = DEFAULTS
     assert cfg["world_size"] == ddp_world_size, (
         f"rl: job file declares world_size={cfg['world_size']}, but this run was launched with {ddp_world_size} rank(s) -- "
         f"edit the job file's \"world_size\" to match the actual launch.")
 
-    num_epochs = cfg.get("num_epochs", 1)
-    examples_per_step = cfg.get("examples_per_step", 16)
-    num_samples = cfg.get("num_samples", 16)
-    device_batch_size = cfg.get("device_batch_size", 8)
+    num_epochs = cfg.get("num_epochs", defaults["num_epochs"])
+    examples_per_step = cfg.get("examples_per_step", defaults["examples_per_step"])
+    num_samples = cfg.get("num_samples", defaults["num_samples"])
+    device_batch_size = cfg.get("device_batch_size", defaults["device_batch_size"])
     max_new_tokens = cfg.get("max_new_tokens", DEFAULT_MAX_NEW_TOKENS)
-    temperature = cfg.get("temperature", 1.0)
+    temperature = cfg.get("temperature", defaults["temperature"])
     top_k = cfg.get("top_k", DEFAULT_TOP_K)
-    eval_every = cfg.get("eval_every", 60)
-    eval_examples = cfg.get("eval_examples", 400)
-    save_every = cfg.get("save_every", 60)
+    eval_every = cfg.get("eval_every", defaults["eval_every"])
+    eval_examples = cfg.get("eval_examples", defaults["eval_examples"])
+    save_every = cfg.get("save_every", defaults["save_every"])  # <= 0: only the final step saves
     assert num_samples % device_batch_size == 0, f"rl: num_samples ({num_samples}) must be a multiple of device_batch_size ({device_batch_size})"
     assert examples_per_step % ddp_world_size == 0, f"rl: examples_per_step ({examples_per_step}) must be divisible by world_size ({ddp_world_size})"
     examples_per_rank = examples_per_step // ddp_world_size
@@ -164,21 +170,9 @@ def run(cfg: dict, ctx) -> dict:
     print0(f"[{cfg['name']}] {num_steps} steps, {examples_per_step * num_samples} sequences per step")
 
     checkpoint_dir = checkpoints.resolve_checkpoint_dir(output_tag)
-    resumed_step = None
+    resumed_step = checkpoints.resume_point(ctx, cfg["name"], output_tag, ddp_world_size)
     optimizer_state = None
     prior_training_time = 0.0
-    if ctx.resume:
-        resumed_step = ctx.resume_checkpoint_step(cfg["name"])
-        if ctx.remote is not None:
-            try:
-                checkpoints.ensure_local(ctx.remote, output_tag, resumed_step, optim=True, ranks=range(ddp_world_size))
-            except FileNotFoundError:
-                pass
-        if resumed_step is None:
-            try:
-                resumed_step = checkpoints.find_last_step(checkpoint_dir)
-            except FileNotFoundError:
-                pass
     if resumed_step is not None:
         model, optimizer_state, meta = checkpoints.load_for_resume(checkpoint_dir, resumed_step, device, ddp_rank, manager)
         saved_world_size = meta.get("user_config", {}).get("world_size")
@@ -192,10 +186,8 @@ def run(cfg: dict, ctx) -> dict:
         print0(f"[{cfg['name']}] resuming from step {resumed_step}")
     else:
         # A "model_config" here is an override request (attach LoRA/DoRA adapters), as in sft.
-        config_override = None
-        if "model_config" in cfg:
-            config_override = modelconfig.load_model_config(
-                cfg["model_config"], sequence_len=cfg["sequence_len"], vocab_size=tokenizer.get_vocab_size())
+        config_override = modelconfig.load_override(
+            cfg, sequence_len=cfg["sequence_len"], vocab_size=tokenizer.get_vocab_size())
         model, _tok, meta = checkpoints.load_model(
             cfg["source_tag"], device, phase="train", step=cfg.get("source_step"), config_override=config_override,
             tokenizer_spec=tokenizer_spec, remote=ctx.remote)
@@ -203,25 +195,19 @@ def run(cfg: dict, ctx) -> dict:
     real_config = model.config
     engine = Engine(model, tokenizer, manager=manager)
 
-    hparams = dict(unembedding_lr=cfg.get("unembedding_lr", 0.004), embedding_lr=cfg.get("embedding_lr", 0.2),
-                   matrix_lr=cfg.get("matrix_lr", 0.02), weight_decay=cfg.get("weight_decay", 0.0))
-    for key in ("adapter_lr", "adapter_scalar_lr"):
-        if key in cfg:
-            hparams[key] = cfg[key]
-    optimizer = manager.create_optimizer(model, OptimizerHparams(**hparams))
+    optimizer = manager.create_optimizer(model, modelconfig.optimizer_hparams(cfg, defaults))
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)  # bit-exact restore: LRs and initial_lr come with it
     else:
         # The RL LR is a small fraction of the base LR, then ramps linearly to zero.
         for group in optimizer.param_groups:
-            group["lr"] *= cfg.get("init_lr_frac", 0.05)
+            group["lr"] *= cfg.get("init_lr_frac", defaults["init_lr_frac"])
             group["initial_lr"] = group["lr"]
 
     tokenizer_fingerprint = tokenizer.fingerprint()
 
     def _save(step, pass_at_k, elapsed):
-        saved_config = dataclasses.replace(real_config, tokenizer=tokenizer.descriptor(ctx.tokenizer_name_for(tokenizer_spec)),
-                                           template="nanochat")  # RL trains in the chat format, like sft
+        saved_config = checkpoints.checkpoint_config(real_config, tokenizer, ctx.tokenizer_name_for(tokenizer_spec), chat=True)
         meta_data = {
             "step": step, "kind": "rl", "tokenizer_fingerprint": tokenizer_fingerprint,
             "model_config": manager.config_to_dict(saved_config),
@@ -229,21 +215,13 @@ def run(cfg: dict, ctx) -> dict:
             "base_model_tag": base_model_tag, "base_model_step": base_model_step,
             "total_training_time": elapsed, "pass_at_k": pass_at_k,
         }
-        push = None
-        if ctx.uploader is not None and (push_model != "none" or push_optim != "none"):
-            def push(step_):
-                inputs = {"source": f"checkpoints/{cfg['source_tag']}@{base_model_step}",
-                          "model_config_sha256": hashlib.sha256(json.dumps(meta_data["model_config"], sort_keys=True).encode()).hexdigest()}
-                if tokenizer_spec is None or "/" not in tokenizer_spec:
-                    inputs["tokenizer"] = f"tokenizers/{ctx.tokenizer_name_for(tokenizer_spec)}"
-                producer = ctx.producer(cfg["name"])
-                ctx.uploader.submit(
-                    f"checkpoints/{output_tag}",
-                    lambda remote: remote_mod.push_checkpoint_step(
-                        remote, checkpoint_dir, output_tag, step_, push_model=push_model, push_optim=push_optim,
-                        ranks=range(ddp_world_size), producer=producer, inputs=inputs, motivation=cfg.get("_comment", ""),
-                        metrics={"step": step_, "pass_at_1": (pass_at_k or [None])[0]}),
-                    label=f"checkpoints/{output_tag}@{step_}")
+        inputs = {"source": f"{remote_mod.CHECKPOINTS}/{cfg['source_tag']}@{base_model_step}",
+                  "model_config_sha256": checkpoints.model_config_sha256(meta_data["model_config"])}
+        tokenizer_entity = bucket_entity(tokenizer_spec, ctx.tokenizer_name_for(tokenizer_spec))
+        if tokenizer_entity is not None:
+            inputs["tokenizer"] = tokenizer_entity
+        push = checkpoints.make_push(ctx, cfg, output_tag=output_tag, checkpoint_dir=checkpoint_dir, push_model=push_model,
+                                     push_optim=push_optim, inputs=inputs, metrics={"pass_at_1": (pass_at_k or [None])[0]})
         checkpoints.save_checkpoint(checkpoint_dir, step, model.state_dict(), optimizer.state_dict(), meta_data,
                                     rank=ddp_rank, push=push, barrier=ctx.uploader is not None)
         ctx.record_checkpoint(cfg["name"], step)  # only after the save fully returned

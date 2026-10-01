@@ -14,11 +14,9 @@ tokenizers are unaffected: a step that loaded "a" doesn't stop a later step from
 import os
 import time
 
-import torch
-
 from tinylab import data
 from tinylab.runtime import print0
-from tinylab.tokenizer import DEFAULT_TOKENIZER_NAME, RustBPETokenizer, resolve_tokenizer_dir
+from tinylab.tokenizer import RustBPETokenizer, bucket_entity, resolve_tokenizer_dir
 
 _COMMON_KEYS = {"max_chars", "doc_cap", "vocab_size", "shards", "output", "push"}
 
@@ -43,9 +41,8 @@ def _text_iterator(train_paths, doc_cap, max_chars):
                 return
 
 
-def _push(cfg, ctx, tokenizer, name, tokenizer_dir, chars_per_token):
+def _push(cfg, ctx, tokenizer, entity, tokenizer_dir, chars_per_token):
     from tinylab import remote as remote_mod
-    entity = f"tokenizers/{name}"
     producer = ctx.producer(cfg["name"])
     extra = {"vocab_size": tokenizer.get_vocab_size(), "fingerprint": tokenizer.fingerprint()}
     if chars_per_token is not None:
@@ -100,12 +97,11 @@ def run(cfg: dict, ctx) -> dict:
 
     tokenizer_dir = resolve_tokenizer_dir(output)
     tokenizer.save(tokenizer_dir)
-    token_bytes = torch.tensor(tokenizer.token_byte_lengths(), dtype=torch.int32)
-    torch.save(token_bytes, os.path.join(tokenizer_dir, "token_bytes.pt"))
     print0(f"Saved tokenizer to {tokenizer_dir}")
 
-    if ctx.uploader is not None and cfg.get("push", True) and not (output and ("/" in output or os.sep in output)):
-        _push(cfg, ctx, tokenizer, output or DEFAULT_TOKENIZER_NAME, tokenizer_dir, chars_per_token)
+    entity = bucket_entity(output, ctx.tokenizer_name_for(output))
+    if ctx.uploader is not None and cfg.get("push", True) and entity is not None:
+        _push(cfg, ctx, tokenizer, entity, tokenizer_dir, chars_per_token)
 
     return {
         "op": "tokenizer", "output": tokenizer_dir, "vocab_size": tokenizer.get_vocab_size(),

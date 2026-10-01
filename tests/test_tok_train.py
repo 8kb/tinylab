@@ -90,7 +90,6 @@ def test_tokenizer_op_trains_and_writes_a_real_tokenizer_against_a_local_fixture
     tokenizer_dir = os.path.join(base_dir, "tokenizers", "default")
     assert result["output"] == tokenizer_dir
     assert os.path.exists(os.path.join(tokenizer_dir, "tokenizer.pkl"))
-    assert os.path.exists(os.path.join(tokenizer_dir, "token_bytes.pt"))
 
     # A subsequent get_tokenizer() picks up what was just trained, not the bundled default.
     from tinylab.tokenizer import get_tokenizer
@@ -149,7 +148,7 @@ def test_tokenizer_op_refuses_to_overwrite_one_this_run_already_loaded(base_dir,
     "default" would keep using its in-memory copy while the new vocab on disk went unused."""
     _patch_fixture_shards(base_dir, monkeypatch)
     ctx = Context(device_type="cpu")
-    ctx.tokenizer  # an earlier step loads the default tokenizer
+    ctx.tokenizer_for(None)  # an earlier step loads the default tokenizer
     cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1}
     with pytest.raises(RuntimeError, match="already loaded"):
         tokenizer_run(cfg, ctx)
@@ -161,6 +160,6 @@ def test_context_caches_one_tokenizer_per_directory(base_dir):
     from tinylab.tokenizer import get_tokenizer
     get_tokenizer(base_dir).save(os.path.join(base_dir, "tokenizers", "copy"))
     ctx = Context(device_type="cpu")
-    assert ctx.tokenizer is ctx.tokenizer_for(None) is ctx.tokenizer_for("default")
-    assert ctx.tokenizer_for("copy") is not ctx.tokenizer
-    assert ctx.tokenizer_name == "default" and Context(tokenizer_spec="copy").tokenizer_name == "copy"
+    assert ctx.tokenizer_for(None) is ctx.tokenizer_for("default")
+    assert ctx.tokenizer_for("copy") is not ctx.tokenizer_for(None)
+    assert ctx.tokenizer_name_for(None) == "default" and ctx.tokenizer_name_for("copy") == "copy"

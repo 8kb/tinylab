@@ -29,6 +29,9 @@ from tinylab import readme
 from tinylab.runtime import get_base_dir, print0
 
 HF_PREFIX = "hf://buckets/"
+# The top-level folders of the bucket (they mirror base_dir's own layout); an entity id is
+# "<folder>/<name>".
+CHECKPOINTS, TOKENIZERS, PREPARED, TASK_DATA = "checkpoints", "tokenizers", "prepared", "task_data"
 RETRIES = 4
 BACKOFF_SECONDS = 2.0
 
@@ -323,11 +326,11 @@ def entities(listing: dict[str, int]) -> dict[str, dict]:
     for path, size in listing.items():
         parts = path.split("/")
         top = parts[0]
-        if top == "tokenizers" and len(parts) >= 3:
+        if top == TOKENIZERS and len(parts) >= 3:
             add("/".join(parts[:2]), "tokenizer", path, size)
-        elif top == "prepared" and len(parts) >= 3:
+        elif top == PREPARED and len(parts) >= 3:
             add("/".join(parts[:2]), "dataset", path, size)
-        elif top == "checkpoints" and len(parts) >= 3:
+        elif top == CHECKPOINTS and len(parts) >= 3:
             name = parts[-1]
             if _MODEL_RE.match(name) or _META_RE.match(name) or _OPTIM_RE.match(name):
                 add("/".join(parts[:-1]), "checkpoint", path, size)
@@ -335,7 +338,7 @@ def entities(listing: dict[str, int]) -> dict[str, dict]:
             add("/".join(parts[:2]), "experiment", path, size)
         elif top == "eval_bundle" and len(parts) >= 2:
             add("eval_bundle", "bench-data", path, size)
-        elif top == "task_data" and len(parts) >= 3:
+        elif top == TASK_DATA and len(parts) >= 3:
             add("/".join(parts[:-1]), "bench-data", path, size)
     return found
 
@@ -442,7 +445,7 @@ def push_checkpoint_step(remote: Remote, local_dir: str, tag: str, step: int, *,
     """One checkpoint step: [model, optim_rank*] first, meta last; then retention (`"last"` deletes
     the older steps' remote copies -- meta before model, so an older step never looks complete
     without its weights); then the entity README. Runs on the Uploader thread."""
-    entity_id = f"checkpoints/{tag}"
+    entity_id = f"{CHECKPOINTS}/{tag}"
     model_n, meta_n, optim_ns = _checkpoint_names(step, ranks)
     existing = gate_producer(remote, entity_id, producer, force=force)
     listing = remote.list(entity_id)
@@ -455,11 +458,9 @@ def push_checkpoint_step(remote: Remote, local_dir: str, tag: str, step: int, *,
         marker = (os.path.join(local_dir, meta_n), f"{entity_id}/{meta_n}")
     if not files and not marker:
         return
-    if marker is None:
-        # optimizer-only push: no completeness marker to gate on, so the group is never "complete".
-        pushed = push_group(remote, listing, files, None, force=force)
-    else:
-        pushed = push_group(remote, listing, files, marker, force=force)
+    # marker is None for an optimizer-only push: no completeness marker to gate on, so the group is
+    # never "complete".
+    pushed = push_group(remote, listing, files, marker, force=force)
 
     doomed = []
     for s, f in sorted(step_files(listing, entity_id).items()):
@@ -643,7 +644,7 @@ def pull_checkpoint(remote: Remote, tag: str, base_dir: str | None = None, *, st
                     optim: bool = False, ranks=None) -> int:
     """model + meta of `step` (default: the newest step with a marker); `optim_*` only if asked.
     Returns the step. Raises FileNotFoundError if the bucket has no complete matching step."""
-    entity_id = f"checkpoints/{tag}"
+    entity_id = f"{CHECKPOINTS}/{tag}"
     listing = remote.list(entity_id)
     steps = complete_steps(listing, entity_id)
     if step is None:
@@ -665,16 +666,16 @@ def pull_tokenizer(remote: Remote, name: str, base_dir: str | None = None) -> li
     """The whole tokenizers/<name>/ folder. If a local copy already exists its tokenizer.pkl must
     be byte-identical (rule 6) -- a mismatch is a hard error, never an overwrite."""
     base_dir = base_dir or get_base_dir()
-    local_pkl = os.path.join(base_dir, "tokenizers", name, "tokenizer.pkl")
-    listing = remote.list(f"tokenizers/{name}")
-    if f"tokenizers/{name}/tokenizer.pkl" not in listing:
-        raise FileNotFoundError(f"{remote.url}: no tokenizer {name!r} (tokenizers/{name}/tokenizer.pkl missing)")
+    local_pkl = os.path.join(base_dir, TOKENIZERS, name, "tokenizer.pkl")
+    listing = remote.list(f"{TOKENIZERS}/{name}")
+    if f"{TOKENIZERS}/{name}/tokenizer.pkl" not in listing:
+        raise FileNotFoundError(f"{remote.url}: no tokenizer {name!r} ({TOKENIZERS}/{name}/tokenizer.pkl missing)")
     if os.path.exists(local_pkl):
-        remote_bytes = remote.get_bytes(f"tokenizers/{name}/tokenizer.pkl")
+        remote_bytes = remote.get_bytes(f"{TOKENIZERS}/{name}/tokenizer.pkl")
         if hashlib.sha256(remote_bytes).hexdigest() != sha256_file(local_pkl):
             raise RemoteError(f"tokenizer {name!r}: the local tokenizer.pkl differs from the bucket's -- refusing to "
                               f"overwrite it (token ids would change meaning). Rename one of them.")
-    return pull_prefix(remote, f"tokenizers/{name}", base_dir)
+    return pull_prefix(remote, f"{TOKENIZERS}/{name}", base_dir)
 
 
 # ---------------------------------------------------------------------------------------------

@@ -27,8 +27,8 @@ class Context:
     _tokenizers: dict = field(default_factory=dict, repr=False, compare=False)  # resolved dir -> loaded tokenizer
     # Resume plumbing, wired up by tinylab.job.run_file (and only there) -- see its own docstring.
     # Both default to "nothing to hook into", so ops.train.run() stays fully usable standalone
-    # (tests construct a bare Context with neither) and just falls back to scanning its checkpoint
-    # directory for the latest step, as it always has.
+    # (tests construct a bare Context with neither): checkpoints.resume_point then scans the
+    # checkpoint directory for the latest step.
     _resume_checkpoint_steps: dict = field(default_factory=dict, repr=False, compare=False)
     _on_checkpoint: object | None = field(default=None, repr=False, compare=False)
     # Central store plumbing, wired up by tinylab.job.run_file from the "remote" key (see
@@ -39,11 +39,17 @@ class Context:
     experiment: str | None = None
     job_name: str | None = None
 
+    @property
+    def tracked(self) -> bool:
+        """True when job.run_file drives this run and keeps a job state file for it (as opposed to a
+        bare Context an op is called with directly, as this repo's own tests do)."""
+        return self._on_checkpoint is not None
+
     def resume_checkpoint_step(self, step_name: str) -> "int | None":
         """The job-state-file-confirmed checkpoint step to resume step_name from, or None if
         there's no hint -- either this isn't a job.run_file-driven run, or the step has no
-        "in_progress" entry (nothing interrupted it, or it was never started). The caller (ops.
-        train.run) falls back to a directory scan in that case."""
+        "in_progress" entry (nothing interrupted it, or it was never started). What checkpoints.
+        resume_point does then depends on `tracked`."""
         return self._resume_checkpoint_steps.get(step_name)
 
     def record_checkpoint(self, step_name: str, checkpoint_step: int) -> None:
@@ -102,21 +108,6 @@ class Context:
             self._bench_manager = BenchManager()
         return self._bench_manager
 
-    @property
-    def tokenizer(self):
-        """The run's default tokenizer (tokenizer_spec, read off the first resolved step -- see
-        tinylab.job.run_file), loaded once and memoized. Any individual step that sets its own
-        "tokenizer" key uses tokenizer_for(that spec) instead -- see COMMON_KEYS below; this
-        property is the fallback a step without one gets."""
-        return self.tokenizer_for(self.tokenizer_spec)
-
-    @property
-    def tokenizer_name(self):
-        """What a checkpoint's `tokenizer` block records, for a step using the run's default
-        tokenizer. A step with its own "tokenizer" key uses tokenizer_name_for(that spec)
-        instead."""
-        return self.tokenizer_name_for(self.tokenizer_spec)
-
     def tokenizer_for(self, spec):
         """Any named tokenizer, memoized per resolved directory -- two specs naming the same
         directory share one loaded instance. A job that trains two differently-vocabbed models
@@ -153,8 +144,7 @@ class Context:
 # by every step in a run either way).
 #
 # "tokenizer" is different from the other four: it's still read off the first resolved step as the
-# *run's default* (job.run_file's Context(tokenizer_spec=...), used by ctx.tokenizer/tokenizer_name
-# and by "chat"), but unlike "device" it is NOT one-per-run -- prepare/train/bench/rl each resolve
+# *run's default* (job.run_file's Context(tokenizer_spec=...), used by "chat"), but unlike "device" it is NOT one-per-run -- prepare/train/bench/rl each resolve
 # their OWN step's "tokenizer" key via ctx.tokenizer_for(cfg.get("tokenizer")), falling back to the
 # run default only when a step doesn't set one. A job training two differently-vocabbed models sets
 # "tokenizer" per relevant step rather than in "defaults" -- see docs/job-file.md.

@@ -78,7 +78,7 @@ def _run_chat(cfg, ctx, model, tokenizer):
     from benchcore import build_chat_tasks
     if ctx.remote is not None:
         from tinylab import remote as remote_mod
-        remote_mod.pull_prefix(ctx.remote, "task_data")  # bench sets only; SmolTalk is never in the bucket
+        remote_mod.pull_prefix(ctx.remote, remote_mod.TASK_DATA)  # bench sets only; SmolTalk is never in the bucket
     task_names = cfg.get("tasks")
     try:
         tasks = build_chat_tasks(task_names, cache_dir=get_base_dir())
@@ -104,13 +104,13 @@ def _run_bpb(cfg, ctx, model, tokenizer):
     (cfg["dataset"], else the default name for this model's sequence_len and the tokenizer),
     split_tokens (default 20,971,520) tokens per split, rounded down to a whole number of eval
     batches. Returns {"op": "bench", "suite": "bpb", "results": {"train", "val"}}."""
-    from tinylab.ops.train import _open_dataset
+    from tinylab.ops.prepare import open_prepared
     sequence_len = model.config.sequence_len
     device_batch_size = cfg.get("device_batch_size", 32)
     tokens_per_step = device_batch_size * sequence_len * ctx.world_size
     split_tokens = cfg.get("split_tokens", 40 * 524288)
     steps = max(1, split_tokens // tokens_per_step)
-    _name, dataset, token_bytes = _open_dataset(cfg, ctx, "base", sequence_len, tokenizer)
+    _name, dataset, token_bytes = open_prepared(cfg, ctx, "base", sequence_len, tokenizer)
     results = {}
     for split in ("train", "val"):
         loader = ctx.data_manager.batches(dataset, split, device_batch_size, device=ctx.device, rank=ctx.rank,

@@ -72,13 +72,13 @@ def cmd_pull(remote: R.Remote, args) -> int:
     entity, at_step = _split_step(args.entity)
     step = args.step if args.step is not None else at_step
     top = entity.split("/")[0]
-    if top == "checkpoints":
-        got = R.pull_checkpoint(remote, entity[len("checkpoints/"):], step=step, optim=args.optim)
+    if top == R.CHECKPOINTS:
+        got = R.pull_checkpoint(remote, entity[len(R.CHECKPOINTS) + 1:], step=step, optim=args.optim)
         print(f"pulled {entity} step {got} -> {_local(entity)}")
-    elif top == "tokenizers":
+    elif top == R.TOKENIZERS:
         fetched = R.pull_tokenizer(remote, entity.split("/")[1])
         print(f"pulled {entity}: {len(fetched)} file(s)")
-    elif top == "prepared":
+    elif top == R.PREPARED:
         if f"{entity}/manifest.json" not in remote.list(entity):
             print(f"error: {entity} has no manifest.json in the bucket -- incomplete, not pulling", file=sys.stderr)
             return 1
@@ -107,8 +107,8 @@ def cmd_push(remote: R.Remote, args) -> int:
         print(f"error: {src} does not exist locally", file=sys.stderr)
         return 1
     producer = _existing_producer(remote, entity)
-    if top == "checkpoints":
-        tag = entity[len("checkpoints/"):]
+    if top == R.CHECKPOINTS:
+        tag = entity[len(R.CHECKPOINTS) + 1:]
         local_steps = sorted(R.step_files({os.path.join(entity, n): 0 for n in os.listdir(src)}, entity))
         steps = [int(s) for s in args.steps.split(",")] if args.steps else local_steps[-1:]
         if not steps:
@@ -119,11 +119,11 @@ def cmd_push(remote: R.Remote, args) -> int:
                                    ranks=range(int(os.environ.get("WORLD_SIZE", 1))), producer=producer, force=args.force)
             print(f"pushed {entity} step {step}")
         return 0
-    marker = {"tokenizers": "tokenizer.pkl", "prepared": "manifest.json"}.get(top)
-    if top in ("tokenizers", "prepared"):
+    marker = {R.TOKENIZERS: "tokenizer.pkl", R.PREPARED: "manifest.json"}.get(top)
+    if top in (R.TOKENIZERS, R.PREPARED):
         existing = R.gate_producer(remote, entity, producer, force=args.force)
         pushed = R.push_dir(remote, src, entity, marker_name=marker, force=args.force)
-        R.write_readme(remote, entity, existing, kind="tokenizer" if top == "tokenizers" else "dataset", producer=producer,
+        R.write_readme(remote, entity, existing, kind="tokenizer" if top == R.TOKENIZERS else "dataset", producer=producer,
                        history="pushed (cli)")
     else:
         pushed = R.push_dir(remote, src, entity, marker_name=None, force=args.force)
@@ -193,7 +193,7 @@ def cmd_rm(remote: R.Remote, args) -> int:
         print(f"error: nothing at {entity}", file=sys.stderr)
         return 1
     if step is not None:
-        if not entity.startswith("checkpoints/"):
+        if not entity.startswith(R.CHECKPOINTS + "/"):
             print("error: @step only applies to checkpoints/<tag>", file=sys.stderr)
             return 1
         f = R.step_files(listing, entity).get(step)

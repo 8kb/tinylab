@@ -27,16 +27,17 @@ import os
 import sys
 
 from tinylab import checkpoints
+from tinylab.ops import train
 from tinylab.runtime import get_base_dir
 
 DEFAULT_TARGET_PARAM_DATA_RATIO = 12.0
-DEFAULT_WEIGHT_DECAY = 0.28
+DEFAULT_WEIGHT_DECAY = train.DEFAULTS["base"]["weight_decay"]
 
 
 def _meta_model(config):
     """A meta-device Model (shapes only, no weights): adapter targets/inventory are structural."""
     import torch
-    from modelcore.model import Model
+    from modelcore import Model
     with torch.device("meta"):
         return Model(config)
 
@@ -48,7 +49,7 @@ def list_linear_targets(model) -> list:
 
 
 def adapter_inventory(model) -> list:
-    from modelcore.peft import find_adapters
+    from modelcore import find_adapters
     rows = []
     for fqn, module in find_adapters(model):
         for name, delta in module.deltas.items():
@@ -119,7 +120,7 @@ def training_plan_block(row, args) -> dict:
     """The plan modelcore.scaling.derive_training_plan derives for this model's own numbers. d_ref
     is --d-ref-scaling-params, else the model's own scaling params (right when this *is* the d12
     muP reference; llmllab/tools/make_config.py prints the reference's number for any other depth)."""
-    from modelcore.scaling import derive_training_plan
+    from modelcore import derive_training_plan
     scaling = row["params"]["scaling"]
     d_ref = args.d_ref_scaling_params if args.d_ref_scaling_params is not None else scaling
     plan = derive_training_plan(
@@ -130,7 +131,7 @@ def training_plan_block(row, args) -> dict:
     # takes to finish (divided by num_gpus). Don't conflate the two when pricing a run.
     gpu_hours = wall_clock_hours = None
     if args.gpu is not None:
-        from modelcore.runtime import peak_flops
+        from modelcore import peak_flops
         gpu_hours = plan.total_flops / (peak_flops(args.gpu) * args.mfu) / 3600
         wall_clock_hours = gpu_hours / args.num_gpus
     return {

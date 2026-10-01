@@ -84,8 +84,9 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   repo, its own versioning discipline, out of scope for a tinylab-only change. The job state file
   above fixes *which checkpoint step resume trusts*, not the individual checkpoint file's own
   write; a resume with no state-file hint (a bare `Context`, not driven through `job.run_file`)
-  still falls back to a directory scan and is still exposed to a checkpoint that started writing
-  and never finished.
+  falls back to a directory scan (`checkpoints.resume_point`) and is still exposed to a checkpoint that
+  started writing and never finished. In a job-driven run the same situation (a checkpoint on disk, no
+  record) is a hard error, not a guess.
 - **`chat` is a separate CLI command, never a job op.** A pipeline step must run to completion
   unattended; a REPL blocks on a human at a prompt. Don't add `"chat"` to `tinylab.ops.OPS` —
   `tests/test_job.py` pins this (a step with `"op": "chat"` is rejected as an unknown op).

@@ -7,7 +7,7 @@ import os
 import pytest
 
 from modelcore import ModelConfig, ModelManager
-from modelcore.scaling import derive_training_plan
+from modelcore import derive_training_plan
 
 from conftest import TINY_GPT_CONFIG
 from tinylab import info

@@ -9,7 +9,7 @@ derivation rule.
 """
 import json
 
-from modelcore import ModelConfig
+from modelcore import ModelConfig, OptimizerHparams
 
 
 def load_model_config(path: str, *, sequence_len: int, vocab_size: int) -> ModelConfig:
@@ -30,3 +30,26 @@ def load_model_config(path: str, *, sequence_len: int, vocab_size: int) -> Model
         f'tokenizer\'s vocab size is {vocab_size} -- both must come from the same tokenizer.'
     )
     return config
+
+
+def load_override(cfg: dict, *, sequence_len: int, vocab_size: int) -> "ModelConfig | None":
+    """An sft/rl step's optional "model_config" is a config-override request (e.g. attach LoRA/DoRA
+    adapters to an already-trained base), not a from-scratch build: returns the loaded tree, or None
+    when the step names none and the checkpoint's own stored config should be used unchanged."""
+    if "model_config" not in cfg:
+        return None
+    return load_model_config(cfg["model_config"], sequence_len=sequence_len, vocab_size=vocab_size)
+
+
+# Optimizer dials a step may set that modelcore has its own default for (adapter/conv/ssm groups
+# exist only on models that have such parameters).
+_OPTIONAL_LR_KEYS = ("adapter_lr", "adapter_scalar_lr", "conv_lr", "ssm_lr")
+
+
+def optimizer_hparams(cfg: dict, defaults: dict) -> OptimizerHparams:
+    """The step's OptimizerHparams: the five always-set dials come from cfg, else `defaults` (the
+    calling op's own DEFAULTS); the optional ones only when the job file names them."""
+    kwargs = {key: cfg.get(key, defaults[key])
+              for key in ("unembedding_lr", "embedding_lr", "matrix_lr", "scalar_lr", "weight_decay")}
+    kwargs.update({key: cfg[key] for key in _OPTIONAL_LR_KEYS if key in cfg})
+    return OptimizerHparams(**kwargs)

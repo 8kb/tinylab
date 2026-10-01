@@ -526,7 +526,7 @@ def test_the_run_wide_tokenizer_reaches_every_ops_context(tmp_path, base_dir, mo
            "steps": [{"name": "a", "op": "prepare", "kind": "base", "shards": 1}]}
     seen = {}
     def fake_run(cfg, ctx):
-        seen["spec"], seen["name"] = ctx.tokenizer_spec, ctx.tokenizer_name
+        seen["spec"], seen["name"] = ctx.tokenizer_spec, ctx.tokenizer_name_for(ctx.tokenizer_spec)
         return {"op": "prepare"}
     monkeypatch.setattr("tinylab.ops.prepare.run", fake_run)
     job.run_file(_write_job(tmp_path, doc))

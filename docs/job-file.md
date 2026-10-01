@@ -65,7 +65,8 @@ also requires `source_tag`.
 
 Launched with `--resume`, a step first checks whether it already has a checkpoint of its own
 (under `output_tag`) and, if so, continues training from it — model, optimizer state, and
-dataloader position all restored, `model_config`/`source_tag` not re-read. See
+dataloader position all restored, `model_config`/`source_tag` not re-read. A checkpoint on disk
+with no job-state record for the step is an error rather than a guess (see the doc below). See
 `docs/architecture.md`'s "Resume: the job state file" section.
 
 tinylab derives no training-horizon or batch-size scaling law of its own — the
@@ -90,10 +91,11 @@ included) lives in `modelcore.scaling`. Compute `total_batch_size`/`num_iteratio
 | `warmup_steps` | Linear LR warmup length, in steps. | `5` (base) / `0` (sft) | both |
 | `warmdown_ratio` | Fraction of the run spent linearly decaying LR to `final_lr_frac`. | `0.65` (base) / `0.5` (sft) | both |
 | `final_lr_frac` | LR multiplier at the end of warmdown. | `0.05` (base) / `0.0` (sft) | both |
-| `muon_momentum_warmup_steps` | Steps Muon's own momentum ramps over before holding at 0.97. | `400` (`modelcore.optim.schedules.muon_momentum`'s own default) | both |
+| `muon_momentum_warmup_steps` | Steps Muon's own momentum ramps over before holding at 0.97. | `400` | both |
+| `seed` | RNG seed for a fresh `kind: base` model's weight initialization. A resumed or sft step takes its weights from a checkpoint and ignores it. | `42` | both |
 | `eval_every` | Run a val-bpb pass every N steps (plus always at the final step). `0` disables eval entirely, including at the final step. | `50` | both |
 | `eval_tokens` | Tokens to evaluate per val pass. | required | both |
-| `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `-1` disables periodic saving (today's behavior: final step only). No local pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows local disk usage without bound (the bucket has its own retention: `push_model`/`push_optim`). | `-1` | both |
+| `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `0` (or any value `<= 0`) disables periodic saving: final step only. No local pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows local disk usage without bound (the bucket has its own retention: `push_model`/`push_optim`). Same meaning as `rl`'s `save_every`. | `0` | both |
 | `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`, always its own "tensorwise" recipe -- the only one implemented; needs an H100+ GPU). | `false` | both |
 | `fp8_eval` | When `fp8` is on, measure val bpb directly in fp8 (`true`) instead of converting back to bf16 first (`false`). Irrelevant without `fp8`. | `true` | both |
 | `doc_masking` | Restrict attention to within each packed row's own document (BOS-delimited), instead of allowing attention across document boundaries within a row. | `false` | both |
@@ -198,13 +200,16 @@ or pulled from the bucket's `task_data/`).
 | `embedding_lr` | Embedding LR (Adam), before the `init_lr_frac` scaling. | `0.2` |
 | `unembedding_lr` | Unembedding LR (Adam). | `0.004` |
 | `matrix_lr` | Matrix LR (Muon). | `0.02` |
+| `scalar_lr` | Scalar-parameter LR (Adam). | `0.5` |
 | `weight_decay` | Weight decay for the Adam groups. | `0.0` |
 | `init_lr_frac` | Starting LR as a fraction of the base LRs above. | `0.05` |
 | `adapter_lr` | LR of adapter (LoRA/DoRA A/B) params, when `model_config` attaches adapters. | modelcore's default |
 | `adapter_scalar_lr` | LR of DoRA's per-channel magnitude param. | modelcore's default |
+| `conv_lr` | LR of depthwise conv filters (`short_conv`, `canon`, `mamba2`/`mamba3` convs). | modelcore's default |
+| `ssm_lr` | LR of the SSM per-head vectors of `mamba2`/`mamba3` mixers. | modelcore's default |
 | `eval_every` | Evaluate pass@1..k on the GSM8K test split every N steps (and once at the end). `0` = never. | `60` |
 | `eval_examples` | Test problems per evaluation. | `400` |
-| `save_every` | Save a checkpoint every N completed steps (the last step always saves). `0` = only the last. | `60` |
+| `save_every` | Save a checkpoint every N completed steps (the last step always saves). `0` (or `<= 0`) = only the last; same meaning as `train`'s `save_every`. | `60` |
 | `push_model` | Which saved steps' model+meta go to the bucket (same policy as `train`). | `"last"` |
 | `push_optim` | Likewise for the optimizer shards. | `"last"` |
 

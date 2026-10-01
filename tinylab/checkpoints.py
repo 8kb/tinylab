@@ -10,12 +10,14 @@ checkpoint it is (pretrained, fine-tuned, whatever comes next) is the job author
 tag, not something the path encodes -- an earlier base_checkpoints/ + chatsft_checkpoints/ split
 would have needed a new directory for every new kind.
 """
+import dataclasses
+import hashlib
 import json
 import os
 import re
 
-from modelcore.store import FileSystemStore
-from modelcore.store import last_step as _last_step
+from modelcore import FileSystemStore
+from modelcore import last_step as _last_step
 
 from tinylab.runtime import get_base_dir
 from tinylab.tokenizer import get_tokenizer
@@ -114,13 +116,94 @@ def ensure_local(remote, tag, step=None, *, optim=False, ranks=None):
             last = None
         if last is not None and local_has(last):
             return last
-        step = last if last is not None else None
+        step = last
 
     def pull():
         found.append(remote_mod.pull_checkpoint(remote, tag, step=step, optim=optim, ranks=ranks))
 
     _rank0_then_barrier(pull)
     return found[0] if found else find_last_step(checkpoint_dir) if step is None else step
+
+
+def _has_checkpoint(checkpoint_dir) -> bool:
+    try:
+        find_last_step(checkpoint_dir)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def resume_point(ctx, name, tag, world_size):
+    """The checkpoint step the step `name` should continue from under `tag`, or None for a fresh
+    start (always None unless ctx.resume). Shared by train and rl.
+
+    The step comes from the job state file (ctx.resume_checkpoint_step) -- the last checkpoint whose
+    save fully returned. With a remote, a clean disk first pulls that step (or the newest one with a
+    marker) from the bucket. With no hint, a bare Context (no job state file: an op called
+    directly) falls back to a directory scan. A *tracked* run with no hint but a checkpoint already
+    on local disk is ambiguous -- the state file is gone (the earlier run finished, or was cleaned
+    up) and the checkpoint may be a finished one or a half-written one -- so it is an error, not a
+    guess: with nothing on disk it is an ordinary fresh start (so --resume is safe to pass
+    unconditionally)."""
+    if not ctx.resume:
+        return None
+    checkpoint_dir = resolve_checkpoint_dir(tag)
+    step = ctx.resume_checkpoint_step(name)
+    local_before = _has_checkpoint(checkpoint_dir)
+    if ctx.remote is not None:
+        try:
+            ensure_local(ctx.remote, tag, step, optim=True, ranks=range(world_size))
+        except FileNotFoundError:
+            pass  # nothing in the bucket either: an ordinary fresh start
+    if step is not None:
+        return step
+    if ctx.tracked and local_before:
+        raise RuntimeError(
+            f"step {name!r}: --resume found checkpoints under {checkpoint_dir} but the job state file has no "
+            f"record for this step (it was deleted when an earlier run finished, or the step was added "
+            f"since). Whether they are complete is unknown, so nothing is resumed: delete them or give the "
+            f"step another output_tag to start fresh, or re-run just this step with --only."
+        )
+    try:
+        return find_last_step(checkpoint_dir)
+    except FileNotFoundError:
+        return None
+
+
+# The chat template a sft/rl checkpoint declares (see modelcore's TEMPLATES); a base checkpoint keeps
+# whatever its model_config said.
+CHAT_TEMPLATE = "nanochat"
+
+
+def checkpoint_config(real_config, tokenizer, tokenizer_name, *, chat):
+    """The config a checkpoint is saved with: the model's own, plus the tokenizer descriptor it needs
+    (see build_model) and, for a chat-format run (sft/rl), the chat template."""
+    config = dataclasses.replace(real_config, tokenizer=tokenizer.descriptor(tokenizer_name))
+    return dataclasses.replace(config, template=CHAT_TEMPLATE) if chat else config
+
+
+def make_push(ctx, cfg, *, output_tag, checkpoint_dir, push_model, push_optim, inputs, metrics):
+    """The push(step) callback save_checkpoint calls on rank 0 after a save, or None when this run
+    uploads nothing. `inputs` (provenance entities) and `metrics` are what the README of the pushed
+    entity records; the step is added to `metrics`."""
+    if ctx.uploader is None or (push_model == "none" and push_optim == "none"):
+        return None
+    from tinylab import remote as remote_mod
+
+    def push(step):
+        producer = ctx.producer(cfg["name"])  # on the calling thread: it asks the hardware
+        ctx.uploader.submit(
+            f"{remote_mod.CHECKPOINTS}/{output_tag}",
+            lambda remote: remote_mod.push_checkpoint_step(
+                remote, checkpoint_dir, output_tag, step, push_model=push_model, push_optim=push_optim,
+                ranks=range(ctx.world_size), producer=producer, inputs=inputs,
+                motivation=cfg.get("_comment", ""), metrics={"step": step, **metrics}),
+            label=f"{remote_mod.CHECKPOINTS}/{output_tag}@{step}")
+    return push
+
+
+def model_config_sha256(config_dict) -> str:
+    return hashlib.sha256(json.dumps(config_dict, sort_keys=True).encode()).hexdigest()
 
 
 def save_checkpoint(checkpoint_dir, step, model_data, optimizer_data, meta_data, rank=0, push=None, barrier=False):
@@ -222,7 +305,7 @@ def load_model(model_tag, device, phase, step=None, config_override=None, tokeni
     return model, tokenizer, meta_data
 
 
-def load_optimizer_state(model_tag, step, device, rank, remote=None):
+def load_optimizer_state(model_tag, step, device, rank, world_size, remote=None):
     """This rank's optimizer shard from another tag's checkpoint, without re-loading its model --
     what a kind="sft" step's momentum warm-start (tinylab.ops.train) needs from its own
     "source_tag". Mirrors our nanochat fork's checkpoint_manager.load_optimizer_state, minus the
@@ -231,6 +314,6 @@ def load_optimizer_state(model_tag, step, device, rank, remote=None):
     saved (e.g. an older checkpoint, or optimizer state genuinely absent) -- the caller decides
     whether that's fatal."""
     checkpoint_dir = resolve_checkpoint_dir(model_tag)
-    ensure_local(remote, model_tag, step, optim=True, ranks=range(int(os.environ.get("WORLD_SIZE", 1))))
+    ensure_local(remote, model_tag, step, optim=True, ranks=range(world_size))
     store = FileSystemStore(checkpoint_dir, step)
     return store.read_optimizer_state(rank=rank, map_location=device)

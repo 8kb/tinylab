@@ -17,7 +17,7 @@ A path in the bucket is the path under `TINYLAB_BASE_DIR`; there is no mapping.
 
 ```
 README.md                          what this is, the map, the rules
-tokenizers/<name>/                 README.md, tokenizer.pkl (marker, last), token_bytes.pt
+tokenizers/<name>/                 README.md, tokenizer.pkl (marker, last)
 prepared/<dataset>/                README.md, *.npy shards, manifest.json (marker, last)
 checkpoints/<tag>/                 README.md, model_<step>.pt, optim_<step>_rank<r>.pt,
                                    meta_<step>.json (marker for that step, last)

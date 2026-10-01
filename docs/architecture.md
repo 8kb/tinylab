@@ -9,7 +9,7 @@ tinylab/
   job.py                loads a job file, deep-merges "defaults", validates keys, runs steps in order
   runtime.py             base dir, device/DDP init, print0
   tokenizer.py           RustBPETokenizer: BPE encode/decode, special tokens, conversation rendering
-  default_tokenizer/     committed tokenizer.pkl + token_bytes.pt (a fixed, pre-trained vocab)
+  default_tokenizer/     committed tokenizer.pkl (a fixed, pre-trained vocab)
   modelconfig.py          loads + validates a materialized modelcore.ModelConfig tree (no
                           preset/depth-dial derivation -- that's llmllab/tools/, see below)
   info.py                 `python -m tinylab info`: read-only params/FLOPs/KV/plan report for a
@@ -88,10 +88,14 @@ never collide):
   the highest step number, because a directory scan can't tell a fully-written checkpoint from one
   that started writing and crashed mid-`torch.save` (still matches the `model_<step>.pt` naming
   pattern, so a scan would happily pick it and then fail to load, even with a perfectly good,
-  slightly older checkpoint sitting right next to it). The directory scan
-  (`checkpoints.find_last_step`) is only a fallback, for a call not driven through `job.run_file`
-  at all (a bare `Context`, as this repo's own tests use) — that path has no state file to consult
-  and keeps today's best-effort behavior. Either way, resume only has something to continue from if
+  slightly older checkpoint sitting right next to it). The logic is `checkpoints.resume_point`, shared
+  by `train` and `rl`. A directory scan (`checkpoints.find_last_step`) is only a fallback for a call
+  not driven through `job.run_file` at all (a bare `Context`, as this repo's own tests use). In a
+  job-driven run, `--resume` with *no* record for a step but a checkpoint already on local disk
+  (the state file was deleted when an earlier run finished, or the step was added since) is a hard
+  error: whether that checkpoint is finished or half-written is unknown, so nothing is guessed — delete
+  it, give the step another `output_tag`, or run just that step with `--only`. With a `remote`, a clean
+  disk first pulls the newest resumable step from the bucket, which is not an error. Either way, resume only has something to continue from if
   the step had already taken at least one periodic checkpoint (`"save_every"`, see
   `docs/job-file.md`) — without one, the step just restarts, which is the best any resume can do. A
   `world_size` mismatch against the checkpoint's own recorded value is a hard error (`MuonAdamW`'s
@@ -170,7 +174,7 @@ with a compatible tokenizer.
 
 ```
 <base_dir>/
-  tokenizers/<name>/         tokenizer.pkl (+ token_bytes.pt). Any number side by side; "default" is
+  tokenizers/<name>/         tokenizer.pkl. Any number side by side; "default" is
                              copied from the bundled vocab on first use, every other name comes
                              from a "tokenizer" step
   base_data_climbmix/        downloaded ClimbMix parquet shards

@@ -1,20 +1,14 @@
 """
-Runtime plumbing: base dir, device/DDP init, minimal logging. Device/DDP/seed bring-up
-(is_ddp_requested/is_ddp_initialized/get_dist_info/autodetect_device_type/compute_init/
-compute_cleanup) now lives in modelcore.runtime -- this file's own copy was ported from our nanochat fork's
-nanochat/common.py, and our nanochat fork's copy has since moved to the same place, since modelcore has no
-host dependencies at all. Re-exported here so every existing `from tinylab.runtime import ...` call
-site keeps working unchanged.
+Runtime plumbing: base dir, device/DDP init, minimal logging. The device/DDP/seed bring-up itself
+lives in modelcore.runtime; this module wraps compute_init to route its log line through print0 and
+re-exports compute_cleanup.
 """
 import os
 from contextlib import contextmanager
 from datetime import datetime
 
-from modelcore.runtime import DEFAULT_RUNTIME
-from modelcore.runtime import (  # noqa: F401 -- re-exported below for existing call sites
-    autodetect_device_type, compute_cleanup, get_dist_info, is_ddp_initialized, is_ddp_requested,
-)
-from modelcore.runtime import compute_init as _compute_init
+from modelcore import DEFAULT_RUNTIME, compute_cleanup  # noqa: F401 -- compute_cleanup is re-exported for job.py and chat.py
+from modelcore import compute_init as _compute_init
 
 # The dtype used for compute (matmuls, activations); master weights stay fp32. Detection lives in
 # modelcore.runtime (modelcore has no tinylab dependencies at all) -- this is a convenience
@@ -26,8 +20,7 @@ COMPUTE_DTYPE_REASON = DEFAULT_RUNTIME.compute_dtype_reason
 def get_base_dir():
     """Not a module-level constant -- computed on every call so TINYLAB_BASE_DIR can be set (e.g.
     by a test) without needing to import this module in a particular order. tinylab keeps its own
-    cache directory, separate from our nanochat fork's ~/.cache/nanochat/, even though the ported tokenizer
-    produces identical token ids -- see AGENTS.md."""
+    cache directory, separate from our nanochat fork's ~/.cache/nanochat/ -- see AGENTS.md."""
     if os.environ.get("TINYLAB_BASE_DIR"):
         base_dir = os.environ["TINYLAB_BASE_DIR"]
     else:

@@ -26,9 +26,15 @@ def main(job_path: str):
     job.check_known_keys(cfg, ACCEPTED_KEYS | COMMON_KEYS, where="\"chat\"")
     assert "model_tag" in cfg, "chat: \"chat\": {\"model_tag\": ...} is required in the job file"
 
-    ctx = Context(device_type=cfg.get("device", "auto"), tokenizer_spec=cfg.get("tokenizer"))
+    # With a "remote" (read-only use: chat never pushes), a checkpoint or tokenizer missing locally is
+    # pulled from the bucket first, as in the bench op.
+    remote = None
+    if cfg.get("remote"):
+        from tinylab import remote as remote_mod
+        remote = remote_mod.open_remote(cfg["remote"])
+    ctx = Context(device_type=cfg.get("device", "auto"), tokenizer_spec=cfg.get("tokenizer"), remote=remote)
     model, tokenizer, meta = checkpoints.load_model(cfg["model_tag"], ctx.device, phase="eval", step=cfg.get("model_step"),
-                                                    tokenizer_spec=ctx.tokenizer_spec)
+                                                    tokenizer_spec=ctx.tokenizer_spec, remote=ctx.remote)
     model.eval()
     engine = Engine(model, tokenizer, manager=ctx.model_manager)
 

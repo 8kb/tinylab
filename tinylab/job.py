@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 from tinylab.checkpoints import validate_experiment, validate_name, validate_tag
 from tinylab.ops import COMMON_KEYS, OPS
+from tinylab.tokenizer import is_path_spec
 
 
 class JobError(ValueError):
@@ -100,7 +101,7 @@ def _resolve_tokenizer_specs(step: dict, job_dir: str, *, where: str):
         value = step[key]
         if not isinstance(value, str) or not value.strip():
             raise JobError(f"{where}, {key!r}: must be a non-empty tokenizer name or path, got {value!r}")
-        if "/" in value or os.sep in value:
+        if is_path_spec(value):
             expanded = os.path.expanduser(value)
             step[key] = expanded if os.path.isabs(expanded) else os.path.normpath(os.path.join(job_dir, expanded))
 

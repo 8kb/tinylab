@@ -7,11 +7,14 @@ packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this modu
 import os
 import time
 
-from datacore import BestFitCropPacker, BestFitPadPacker, ExampleMixture, ExampleTokenSource, FileSystemDatasetStore, ParquetDirectorySource
+from datacore import (
+    BestFitCropPacker, BestFitPadPacker, DatasetMismatch, ExampleMixture, ExampleTokenSource, FileSystemDatasetStore,
+    ParquetDirectorySource,
+)
 
 from tinylab import data
 from tinylab.runtime import get_base_dir, print0
-from tinylab.tokenizer import DEFAULT_MAX_TOKENS_PER_CONVERSATION
+from tinylab.tokenizer import DEFAULT_MAX_TOKENS_PER_CONVERSATION, bucket_entity
 
 # Keys shared by both kinds, plus each kind's own -- see accepted_keys() below, which is kind-
 # aware so e.g. "mmlu_epochs" on a kind="base" step is caught as an error rather than silently
@@ -44,9 +47,42 @@ def _make_store(cfg, ctx, dataset_name, dataset_dir):
         return FileSystemDatasetStore(dataset_dir)
     from tinylab.remote_stores import UploadingDatasetStore
     spec = cfg.get("tokenizer")
-    inputs = {} if spec and "/" in spec else {"tokenizer": f"tokenizers/{ctx.tokenizer_name_for(spec)}"}
+    entity = bucket_entity(spec, ctx.tokenizer_name_for(spec))
+    inputs = {} if entity is None else {"tokenizer": entity}
     return UploadingDatasetStore(dataset_dir, name=dataset_name, uploader=ctx.uploader, producer=ctx.producer(cfg["name"]),
                                  inputs=inputs, motivation=cfg.get("_comment", ""))
+
+
+def open_prepared(cfg, ctx, kind, sequence_len, tokenizer):
+    """Opens the dataset a train/bench step reads, raising a clear error (not letting datacore's own
+    FileNotFoundError propagate unexplained) if it hasn't been prepared yet, or was prepared with a
+    different sequence_len or tokenizer than this step is using. Returns (dataset_name, dataset,
+    token_bytes) -- token_bytes is the per-token-id byte-length table evaluate_bpb needs."""
+    dataset_name = cfg.get("dataset") or default_dataset_name(kind, sequence_len, tokenizer)
+    dataset_dir = prepared_dir(dataset_name)
+    if ctx.remote is not None:
+        # Missing shards stream in from the bucket while training runs on the ones already local.
+        from tinylab.remote_stores import PrefetchingDatasetStore
+        store = PrefetchingDatasetStore(dataset_dir, name=dataset_name, remote=ctx.remote)
+    else:
+        store = FileSystemDatasetStore(dataset_dir)
+    try:
+        # datacore compares only on request (expect_*): the host decides what must match.
+        dataset = ctx.data_manager.open(store, expect_sequence_len=sequence_len, expect_fingerprint=tokenizer.fingerprint())
+    except FileNotFoundError:
+        raise SystemExit(
+            f"No prepared dataset found at {dataset_dir}. Run a \"prepare\" step first, with "
+            f"kind={kind!r} and matching \"sequence_len\"."
+        )
+    except DatasetMismatch as e:
+        if e.reason == "sequence_len":
+            raise SystemExit(f"Dataset {dataset_name!r} was prepared at sequence_len={e.actual}, but this step uses {sequence_len}.")
+        raise SystemExit(
+            f"Dataset {dataset_name!r} was prepared against tokenizer fingerprint "
+            f"{e.actual}, but the local tokenizer's fingerprint is "
+            f"{e.expected} -- refusing to train on it."
+        )
+    return dataset_name, dataset, ctx.data_manager.token_bytes(dataset)
 
 
 def _prepare_base(cfg, ctx, sequence_len, tokenizer):
