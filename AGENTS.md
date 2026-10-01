@@ -19,7 +19,7 @@ Principles (KISS/DRY/YAGNI/SOLID) and the provenance rule: [llmllab/AGENTS.md](.
 
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
 `[tool.uv.sources]`: `modelcore` `v0.13.0` (`modelcore.v3` configs: one `Block` = mixer + features; `short_conv`/`mamba2`/`mamba3` mixers, `canon`/`output_gate` features), `datacore` `v0.5.0`, `benchcore`
-`v0.5.0`.
+`v0.5.1`.
 
 **Old checkpoints.** A pre-v3 checkpoint (e.g. experiment 01's `local-artifacts/checkpoints`) must go
 through `python -m modelcore.convert SRC DST` before `chat`/`bench` (optimizer state is not
@@ -184,6 +184,11 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   every other section is human-owned (`tinylab.readme`); (6) code that adds anything to the bucket
   must go through `tinylab.remote` so `NEVER_SYNC_GLOBS` (raw data, `job_state/`, `*.tmp*`) applies.
   `tests/test_remote*.py` run against `MemoryRemote`, never the network.
+
+- **Special tokens are named once, in `tinylab/tokenizer.py`** (`BOS_NAME`, `CHAT_TOKENS`, which
+  define `SPECIAL_TOKENS`), and everything else reads ids through `tokenizer.ids.<name>`
+  (`ids.bos`, `ids.assistant_end`, …), never a `"<|...|>"` string. The set is what the `chat_tools`
+  template renders with; benchcore/datacore/modelcore only ever receive ids from the host.
 
 ## Testing
 

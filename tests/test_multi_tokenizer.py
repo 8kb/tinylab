@@ -51,8 +51,8 @@ def _write_fake_climbmix_parquet(base_dir):
 def _patch_fixture_shards(base_dir, monkeypatch):
     train_path, val_path = _write_fake_climbmix_parquet(base_dir)
     from tinylab import data
-    monkeypatch.setattr(data, "climbmix_train_val_paths", lambda num_train_shards: ([train_path], [val_path]))
-    monkeypatch.setattr(data, "download_climbmix_shards", lambda n, num_workers=4, log=print: None)
+    monkeypatch.setattr(data, "corpus_train_val_paths", lambda num_train_shards, corpus=data.DEFAULT_CORPUS: ([train_path], [val_path]))
+    monkeypatch.setattr(data, "download_corpus_shards", lambda n, corpus=data.DEFAULT_CORPUS, num_workers=4, log=print: None)
 
 
 def _write_tiny_gpt_config(path, vocab_size, sequence_len=32, n_embd=32, n_head=2, head_dim=16):

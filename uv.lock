@@ -36,8 +36,8 @@ wheels = [
 
 [[package]]
 name = "benchcore"
-version = "0.5.0"
-source = { git = "https://github.com/8kb/benchcore?tag=v0.5.0#be7cb2f0e4a977276ba807dcfe2b0f79357b1c97" }
+version = "0.5.1"
+source = { git = "https://github.com/8kb/benchcore?tag=v0.5.1#4e700a016e5125163e4daeec64650e357b0d6cb9" }
 dependencies = [
     { name = "datacore", extra = ["parquet"] },
     { name = "filelock" },
@@ -1461,7 +1461,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.5.0" },
+    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.5.1" },
     { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.5.0" },
     { name = "huggingface-hub", specifier = ">=1.31" },
     { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.13.0" },

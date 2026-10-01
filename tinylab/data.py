@@ -11,44 +11,82 @@ from datacore.download import download_shards
 from tinylab.runtime import get_base_dir
 
 # -----------------------------------------------------------------------------
-# ClimbMix: the pretraining corpus (karpathy's climbmix-400b-shuffle, the upstream nanochat corpus).
+# Pretraining corpora: a corpus is a URL template over shard indices, with the last shard held out
+# as validation. A job's "corpus" key names one (default: climbmix, karpathy's climbmix-400b-shuffle,
+# the upstream nanochat corpus); adding a corpus is one entry here.
 
-BASE_URL = "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
-MAX_SHARD = 6542  # the last data shard is shard_06542.parquet
-_index_to_filename = lambda index: f"shard_{index:05d}.parquet"
+CORPORA = {
+    "climbmix": {
+        "url": "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main/shard_{index:05d}.parquet",
+        "max_shard": 6542,  # the last data shard, shard_06542.parquet, is the validation shard
+        "filename": "shard_{index:05d}.parquet",
+    },
+}
+DEFAULT_CORPUS = "climbmix"
 
 
-def climbmix_dir():
-    return os.path.join(get_base_dir(), "base_data_climbmix")
+def corpus_spec(corpus):
+    if corpus not in CORPORA:
+        raise ValueError(f"unknown corpus {corpus!r}; known: {sorted(CORPORA)}")
+    return CORPORA[corpus]
 
 
-def download_climbmix_shards(num_train_shards, num_workers=4, log=print):
-    """Downloads num_train_shards train shards plus the (fixed, last) validation shard, skipping
-    any already present. Returns the destination directory."""
-    dest_dir = climbmix_dir()
+def corpus_dir(corpus=DEFAULT_CORPUS):
+    return os.path.join(get_base_dir(), f"base_data_{corpus}")
+
+
+def download_corpus_shards(num_train_shards, corpus=DEFAULT_CORPUS, num_workers=4, log=print):
+    """Downloads num_train_shards train shards plus the (fixed, last) validation shard of `corpus`,
+    skipping any already present. Returns the destination directory."""
+    spec = corpus_spec(corpus)
+    dest_dir = corpus_dir(corpus)
     os.makedirs(dest_dir, exist_ok=True)
-    num_train_shards = min(num_train_shards, MAX_SHARD)
+    num_train_shards = min(num_train_shards, spec["max_shard"])
     ids_to_download = list(range(num_train_shards))
-    ids_to_download.append(MAX_SHARD)  # validation shard is always the last one
+    ids_to_download.append(spec["max_shard"])  # validation shard is always the last one
     result = download_shards(
-        BASE_URL + "/shard_{index:05d}.parquet", ids_to_download, dest_dir,
-        filename_fn=_index_to_filename, num_workers=num_workers, log=log,
+        spec["url"], ids_to_download, dest_dir,
+        filename_fn=lambda index: spec["filename"].format(index=index), num_workers=num_workers, log=log,
     )
     log(f"Downloaded {result['successful']}/{result['total']} shards to {dest_dir}")
     return dest_dir
 
 
-def climbmix_train_val_paths(num_train_shards):
+def corpus_train_val_paths(num_train_shards, corpus=DEFAULT_CORPUS):
     """Absolute paths for exactly the first `num_train_shards` train shards plus the fixed
-    validation shard (always MAX_SHARD) -- built from filenames directly, not from however many
+    validation shard (always max_shard) -- built from filenames directly, not from however many
     files a previous, larger run happened to leave on disk. A directory-listing-and-slice approach
     would silently pack every shard already present when a later job asks for fewer; this can't,
     because it names the exact files it wants and downloads only those that are missing."""
-    num_train_shards = min(num_train_shards, MAX_SHARD)
-    dest_dir = climbmix_dir()
-    train_paths = [os.path.join(dest_dir, _index_to_filename(i)) for i in range(num_train_shards)]
-    val_paths = [os.path.join(dest_dir, _index_to_filename(MAX_SHARD))]
-    return train_paths, val_paths
+    spec = corpus_spec(corpus)
+    num_train_shards = min(num_train_shards, spec["max_shard"])
+    dest_dir = corpus_dir(corpus)
+    name = lambda index: os.path.join(dest_dir, spec["filename"].format(index=index))
+    return [name(i) for i in range(num_train_shards)], [name(spec["max_shard"])]
+
+
+# -----------------------------------------------------------------------------
+# Chat tasks by name: SmolTalk (training data only) plus benchcore's registry of benchmark tasks,
+# matched case-insensitively ("gsm8k" for 'GSM8K'). Used by the sft mixture and the rl task.
+
+def chat_task_name(name):
+    """The registry spelling of a chat task name ('gsm8k' -> 'GSM8K'); raises ValueError listing
+    the known names. benchcore's own names only -- SmolTalk is handled by build_task."""
+    from benchcore import CHAT_TASKS
+    by_lower = {registered.lower(): registered for registered in CHAT_TASKS}
+    if not isinstance(name, str) or name.lower() not in by_lower:
+        raise ValueError(f"unknown task {name!r}; known: {sorted(CHAT_TASKS)} (and 'smoltalk' for sft mixtures)")
+    return by_lower[name.lower()]
+
+
+def build_task(name, split, **task_kwargs):
+    """One task for `split` ("train" or "test"), cached under the base dir: SmolTalk, or any task of
+    benchcore's registry. `task_kwargs` (e.g. stop=) go to the task's ExampleSet constructor."""
+    if isinstance(name, str) and name.lower() == "smoltalk":
+        return SmolTalk(split=split, **task_kwargs)
+    from benchcore import build_chat_tasks
+    registered = chat_task_name(name)
+    return build_chat_tasks([registered], cache_dir=get_base_dir(), split=split, **task_kwargs)[registered]
 
 
 # -----------------------------------------------------------------------------

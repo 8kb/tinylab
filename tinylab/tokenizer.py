@@ -11,6 +11,7 @@ import os
 import pickle
 import shutil
 from importlib import resources
+from types import SimpleNamespace
 
 import tiktoken
 
@@ -23,21 +24,17 @@ DEFAULT_TOKENIZER_NAME = "default"
 # The special tokens baked into default_tokenizer/tokenizer.pkl, in id order. train_from_iterator
 # appends exactly this list after the ordinary vocab, so a retrained tokenizer gets the same set;
 # encode_special resolves a name against whatever the loaded tokenizer actually carries.
-SPECIAL_TOKENS = [
-    # every document begins with the Beginning of Sequence (BOS) token that delimits documents
-    "<|bos|>",
-    # tokens below are only used during finetuning to render Conversations into token ids
-    "<|user_start|>", "<|user_end|>",
-    "<|assistant_start|>", "<|assistant_end|>",
-    "<|python_start|>", "<|python_end|>",
-    "<|output_start|>", "<|output_end|>",
-]
+# Every document begins with the Beginning of Sequence (BOS) token that delimits documents; the
+# CHAT_TOKENS are what the "chat_tools" template renders a Conversation with (user/assistant turns,
+# python tool calls and their outputs). Names are stated once here; the rest of tinylab reads ids
+# through RustBPETokenizer.ids (ids.bos, ids.assistant_end, ...), never a "<|...|>" string.
+BOS_NAME = "bos"
+CHAT_TOKENS = ("user_start", "user_end", "assistant_start", "assistant_end",
+               "python_start", "python_end", "output_start", "output_end")
+SPECIAL_TOKENS = [f"<|{name}|>" for name in (BOS_NAME, *CHAT_TOKENS)]
 
-# A rendered conversation longer than this is truncated (helps prevent OOMs on an unusually long
-# conversation slipping into an SFT mixture). Also datacore/writer.py's row_capacity for the SFT
-# dataset in practice matches sequence_len + 1, so this rarely binds first -- but it's the shared
-# default both tinylab.tokenizer.RustBPETokenizer.render_conversation and tinylab.ops.prepare use,
-# rather than two independent copies of the same number.
+# A rendered conversation longer than this is truncated by render_conversation unless the caller
+# passes max_tokens (tinylab.ops.prepare passes the step's sequence_len, its own default).
 DEFAULT_MAX_TOKENS_PER_CONVERSATION = 2048
 
 # tiktoken's own splitting regex, used only by train_from_iterator (a trained vocab's mergeable
@@ -58,13 +55,14 @@ class RustBPETokenizer:
         self.enc = enc
         self._special_cache = {}
         self.bos_token_id = self.encode_special(bos_token)
+        self.ids = SimpleNamespace(**{name: self.encode_special(f"<|{name}|>") for name in (BOS_NAME, *CHAT_TOKENS)})
 
     @classmethod
     def from_directory(cls, tokenizer_dir):
         pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
         with open(pickle_path, "rb") as f:
             enc = pickle.load(f)
-        return cls(enc, "<|bos|>")
+        return cls(enc, SPECIAL_TOKENS[0])
 
     @classmethod
     def train_from_iterator(cls, text_iterator, vocab_size):
@@ -88,7 +86,7 @@ class RustBPETokenizer:
             name="rustbpe", pat_str=tokenizer.get_pattern(),
             mergeable_ranks=mergeable_ranks, special_tokens=special_tokens,
         )
-        return cls(enc, "<|bos|>")
+        return cls(enc, SPECIAL_TOKENS[0])
 
     def save(self, tokenizer_dir):
         """The from_directory-loadable half of train_from_iterator's output -- only self.enc (the
@@ -208,11 +206,11 @@ class RustBPETokenizer:
             messages[1]["content"] = messages[0]["content"] + "\n\n" + messages[1]["content"]
             messages = messages[1:]
 
-        bos = self.get_bos_token_id()
-        user_start, user_end = self.encode_special("<|user_start|>"), self.encode_special("<|user_end|>")
-        assistant_start, assistant_end = self.encode_special("<|assistant_start|>"), self.encode_special("<|assistant_end|>")
-        python_start, python_end = self.encode_special("<|python_start|>"), self.encode_special("<|python_end|>")
-        output_start, output_end = self.encode_special("<|output_start|>"), self.encode_special("<|output_end|>")
+        special = self.ids
+        bos, user_start, user_end = special.bos, special.user_start, special.user_end
+        assistant_start, assistant_end = special.assistant_start, special.assistant_end
+        python_start, python_end = special.python_start, special.python_end
+        output_start, output_end = special.output_start, special.output_end
 
         add_tokens(bos, 0)
         for i, message in enumerate(messages):
@@ -259,7 +257,7 @@ class RustBPETokenizer:
         assert messages[-1]["role"] == "assistant", "Last message must be from the Assistant"
         messages.pop()
         ids, _mask = self.render_conversation(conversation)
-        ids.append(self.encode_special("<|assistant_start|>"))
+        ids.append(self.ids.assistant_start)
         return ids
 
 

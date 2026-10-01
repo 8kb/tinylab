@@ -46,7 +46,7 @@ _COMMON_KEYS = {
     "adapter_lr", "adapter_scalar_lr", "conv_lr", "ssm_lr",
     "push_model", "push_optim",
 }
-_BASE_KEYS = set()
+_BASE_KEYS = {"corpus"}  # only names the default dataset (see prepare.default_dataset_name)
 # init_lr_frac/load_optimizer are sft-only, deliberately (as in our nanochat fork), and accepted_keys
 # is kind-aware, so either key on a kind="base" step is a startup error instead of a silently-ignored one.
 _SFT_KEYS = {"source_tag", "source_step", "init_lr_frac", "load_optimizer"}

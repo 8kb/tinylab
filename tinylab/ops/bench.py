@@ -12,6 +12,7 @@ import os
 import time
 
 from tinylab import bench_texts, checkpoints
+from tinylab import data as data_mod
 from tinylab.engine import DEFAULT_MAX_NEW_TOKENS, DEFAULT_TOP_K, Engine
 from tinylab.runtime import get_base_dir, print0
 
@@ -24,10 +25,10 @@ _SUITE_KEYS = {
     "core": {"max_per_task"},
     "chat": {"tasks", "batch_size", "num_samples", "max_new_tokens", "temperature", "top_k", "max_problems",
              "generative_batch_size", "eval_workers"},
-    "bpb": {"dataset", "split_tokens", "device_batch_size"},
+    "bpb": {"dataset", "corpus", "split_tokens", "device_batch_size"},
     "sample": {"prompts", "max_new_tokens", "temperature", "top_k"},
     "infer": {"prompt_tokens", "decode_tokens", "batch_sizes", "temperature"},
-    "tokenizer": {"baselines"},
+    "tokenizer": {"baselines", "corpus"},
 }
 SUITES = tuple(_SUITE_KEYS)
 _NO_MODEL_SUITES = {"tokenizer"}
@@ -132,7 +133,7 @@ def _run_sample(cfg, ctx, model, tokenizer):
     engine = Engine(model, tokenizer, manager=ctx.model_manager)
     samples = []
     for prompt in prompts:
-        tokens = tokenizer.encode(prompt, prepend="<|bos|>")
+        tokens = tokenizer.encode(prompt, prepend=tokenizer.ids.bos)
         greedy, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=max_new_tokens, temperature=0.0, top_k=top_k)
         sampled, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=max_new_tokens, temperature=temperature, top_k=top_k)
         row = {"prompt": prompt, "greedy": tokenizer.decode(greedy[0][len(tokens):]),
@@ -149,7 +150,7 @@ def _build_prompt(tokenizer, num_tokens):
     paragraph = ("The history of science is the study of the development of science, "
                  "including both the natural and social sciences. Science is a body of "
                  "empirical, theoretical, and practical knowledge about the natural world. ")
-    tokens = tokenizer.encode(paragraph * (num_tokens // 10), prepend="<|bos|>")
+    tokens = tokenizer.encode(paragraph * (num_tokens // 10), prepend=tokenizer.ids.bos)
     assert len(tokens) >= num_tokens, "prompt text too short, increase the repetition"
     return tokens[:num_tokens]
 
@@ -194,7 +195,8 @@ def _run_infer(cfg, ctx, model, tokenizer, meta):
     engine = Engine(model, tokenizer, manager=manager)
     decode_tokens = cfg.get("decode_tokens", 256)
     temperature = cfg.get("temperature", 0.0)
-    prompt_len = min(cfg.get("prompt_tokens", 2048), config.sequence_len - decode_tokens)  # prompt + decode must fit
+    room = config.sequence_len - decode_tokens  # prompt + decode must fit
+    prompt_len = min(cfg.get("prompt_tokens", room), room)
     assert prompt_len > 0, f"bench infer: decode_tokens={decode_tokens} leaves no room in sequence_len={config.sequence_len}"
     prompt_tokens = _build_prompt(tokenizer, prompt_len)
 
@@ -265,14 +267,14 @@ def _run_infer(cfg, ctx, model, tokenizer, meta):
     return {"op": "bench", "suite": "infer", **payload}
 
 
-def _corpus_texts():
-    """First doc batch of the local ClimbMix train and val shards, if downloaded -- the tokenizer
+def _corpus_texts(corpus):
+    """First doc batch of the local train and val shards of `corpus`, if downloaded -- the tokenizer
     was trained on train-shard text, so val is the honest one. Missing shards are skipped."""
     from datacore import ParquetDirectorySource
     from tinylab import data
     texts = {}
-    train_paths, val_paths = data.climbmix_train_val_paths(1)
-    for name, paths in (("climbmix-train", train_paths), ("climbmix-val", val_paths)):
+    train_paths, val_paths = data.corpus_train_val_paths(1, corpus)
+    for name, paths in ((f"{corpus}-train", train_paths), (f"{corpus}-val", val_paths)):
         if all(os.path.exists(p) for p in paths):
             _path, batch = next(iter(ParquetDirectorySource(paths=paths).text_batches()))
             texts[name] = "\n".join(batch)
@@ -281,7 +283,7 @@ def _corpus_texts():
 
 def _run_tokenizer(cfg, ctx):
     """suite="tokenizer": compression ratio (bytes per token) of this step's tokenizer on fixed
-    texts (news, Korean, code, math, science) plus the local ClimbMix shards when present, with a
+    texts (news, Korean, code, math, science) plus the local shards of "corpus" (default climbmix) when present, with a
     lossless-roundtrip check. cfg["baselines"] (default none) names tiktoken encodings to compare
     against, e.g. ["gpt2", "cl100k_base"] -- their vocab files are downloaded on first use, so
     leaving it off keeps the suite offline. Returns {"op": "bench", "suite": "tokenizer",
@@ -290,7 +292,7 @@ def _run_tokenizer(cfg, ctx):
     baselines = cfg.get("baselines", [])
     if baselines:
         import tiktoken
-    texts = {**bench_texts.TEXTS, **_corpus_texts()}
+    texts = {**bench_texts.TEXTS, **_corpus_texts(cfg.get("corpus", data_mod.DEFAULT_CORPUS))}
     vocab_sizes, results = {}, {}
     for name in ["ours", *baselines]:
         if name == "ours":

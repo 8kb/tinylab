@@ -98,6 +98,10 @@ class Engine:
             return None
         return self.tokenizer.encode(str(result))
 
+    def _terminal_ids(self):
+        """The ids that end a generated row: the end of the assistant's turn, or a new document."""
+        return {self.tokenizer.ids.assistant_end, self.tokenizer.ids.bos}
+
     def generate(self, tokens, num_samples=1, max_tokens=None, temperature=1.0, top_k=None, seed=42):
         """Single prefill, then decode num_samples rows from a shared KV cache. `tokens` may also
         be several prompts (list[list[int]]) decoded together -- see generate_batch_multi. Yields
@@ -105,28 +109,19 @@ class Engine:
         assert isinstance(tokens, list) and tokens and (isinstance(tokens[0], int) or isinstance(tokens[0], list)), \
             "expecting list of ints (or a list of such lists)"
 
-        get_special = lambda s: self.tokenizer.encode_special(s)
-        python_start = get_special("<|python_start|>")
-        python_end = get_special("<|python_end|>")
-        output_start = get_special("<|output_start|>")
-        output_end = get_special("<|output_end|>")
-        assistant_end = get_special("<|assistant_end|>")
-        bos = self.tokenizer.get_bos_token_id()
-
-        tool = ToolSpec(python_start, python_end, output_start, output_end, run=self._run_calculator)
+        ids = self.tokenizer.ids
+        tool = ToolSpec(ids.python_start, ids.python_end, ids.output_start, ids.output_end, run=self._run_calculator)
         yield from generate_with_tools(
             self.model, self.manager, tokens, num_samples=num_samples, max_tokens=max_tokens,
             temperature=temperature, top_k=top_k, seed=seed,
-            terminal_ids={assistant_end, bos}, tools=[tool],
+            terminal_ids=self._terminal_ids(), tools=[tool],
         )
 
     def generate_batch(self, tokens, num_samples=1, **kwargs):
         """Non-streaming batch generation. Returns (results, masks): each a list of num_samples
         token-id lists. Terminal tokens (assistant_end, bos) are excluded."""
-        assistant_end = self.tokenizer.encode_special("<|assistant_end|>")
-        bos = self.tokenizer.get_bos_token_id()
         stream = self.generate(tokens, num_samples, **kwargs)
-        return collect_batch(stream, {assistant_end, bos}, tokens, num_samples)
+        return collect_batch(stream, self._terminal_ids(), tokens, num_samples)
 
     def generate_batch_multi(self, prompts, num_samples=1, **kwargs):
         """
@@ -135,7 +130,5 @@ class Engine:
         num_samples token sequences prefixed with that prompt. At temperature 0 every group equals
         what generate_batch would return for that prompt alone.
         """
-        assistant_end = self.tokenizer.encode_special("<|assistant_end|>")
-        bos = self.tokenizer.get_bos_token_id()
         stream = self.generate([list(p) for p in prompts], num_samples, **kwargs)
-        return collect_batch_multi(stream, {assistant_end, bos}, [list(p) for p in prompts], num_samples)
+        return collect_batch_multi(stream, self._terminal_ids(), [list(p) for p in prompts], num_samples)

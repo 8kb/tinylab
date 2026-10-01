@@ -3,7 +3,7 @@ The `tokenizer` op: trains a fresh BPE vocab and writes it to the tokenizer the 
 "output" key, else the run's "tokenizer", else the default -- see tinylab.tokenizer.
 resolve_tokenizer_dir), overwriting whatever was there. Ported from our nanochat fork's
 scripts/tok_train.py -- see tinylab.tokenizer for the training mechanism itself (rustbpe +
-tiktoken), this module only owns the corpus (ClimbMix, same shards "prepare" kind="base" downloads)
+tiktoken), this module only owns the corpus (the "corpus" key, same shards "prepare" kind="base" downloads)
 and job-file key handling.
 
 Must run before any earlier step in the job file's "steps" list has already loaded that same
@@ -18,7 +18,7 @@ from tinylab import data
 from tinylab.runtime import print0
 from tinylab.tokenizer import RustBPETokenizer, bucket_entity, resolve_tokenizer_dir
 
-_COMMON_KEYS = {"max_chars", "doc_cap", "vocab_size", "shards", "output", "push"}
+_COMMON_KEYS = {"max_chars", "doc_cap", "vocab_size", "shards", "corpus", "output", "push"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -70,9 +70,10 @@ def run(cfg: dict, ctx) -> dict:
             f"in-memory copy out of sync with disk -- put the \"tokenizer\" step first."
         )
     shards = cfg.get("shards", 8)
-    train_paths, _val_paths = data.climbmix_train_val_paths(shards)
+    corpus = cfg.get("corpus", data.DEFAULT_CORPUS)
+    train_paths, _val_paths = data.corpus_train_val_paths(shards, corpus)
     if any(not os.path.exists(p) for p in train_paths):
-        data.download_climbmix_shards(shards, log=print0)
+        data.download_corpus_shards(shards, corpus, log=print0)
 
     vocab_size = cfg.get("vocab_size", 32768)
     doc_cap = cfg.get("doc_cap", 10_000)

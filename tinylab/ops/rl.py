@@ -1,5 +1,6 @@
 """
-The `rl` op: reinforcement learning on GSM8K, starting from an sft checkpoint. Ported from
+The `rl` op: reinforcement learning on a benchcore chat task (GSM8K by default, the "task" key),
+starting from an sft checkpoint. Ported from
 our nanochat fork's scripts/chat_rl.py (see llmllab/docs/history.md). The algorithm is deliberately plainer
 than "GRPO", closer to REINFORCE:
 
@@ -8,17 +9,17 @@ than "GRPO", closer to REINFORCE:
 3) DAPO-style normalization: token-level, not sequence-level;
 4) the advantage is (r - mean(r)) over an example's samples, not the z-score (r - mu) / sigma.
 
-Each step draws `examples_per_step` GSM8K problems (split across ranks), samples `num_samples`
-completions per problem through tinylab.engine.Engine, scores them with benchcore's GSM8K reward
-(1.0 if the final answer is right), and takes one optimizer step on sum(logp * advantage) over the
+Each step draws `examples_per_step` training problems (split across ranks), samples `num_samples`
+completions per problem through tinylab.engine.Engine, scores them with the task's own `reward()`
+(for GSM8K: 1.0 if the final answer is right), and takes one optimizer step on sum(logp * advantage) over the
 sampled, non-forced tokens. The LR ramps linearly down to zero over the run.
 
 Shares train's plumbing (checkpoints.py): one checkpoint namespace (output_tag, kind="rl" in the
 meta, the chat template stamped like sft), the optimizer saved with each checkpoint, and step-level
 resume: a resumed run reloads model + optimizer, checks world_size, and continues the deterministic
 example/seed schedule from where it stopped. Unlike train, no dataset has to be
-prepared: the problems come from benchcore.GSM8K (cached under the base dir; pulled from the
-bucket's task_data/ when a "remote" is set). Not exercised with adapters ("model_config" override)
+prepared: the problems come from the benchcore task (cached under the base dir; pulled from the
+bucket's task_data/ when a "remote" is set). A task without a `reward()` cannot be used. Not exercised with adapters ("model_config" override)
 beyond the same wiring sft has.
 """
 import itertools
@@ -26,14 +27,14 @@ import time
 
 import torch
 
-from tinylab import checkpoints, modelconfig
+from tinylab import checkpoints, data, modelconfig
 from tinylab import remote as remote_mod
 from tinylab.engine import DEFAULT_MAX_NEW_TOKENS, DEFAULT_TOP_K, Engine
-from tinylab.runtime import get_base_dir, print0
+from tinylab.runtime import print0
 from tinylab.tokenizer import bucket_entity
 
 _KEYS = {
-    "source_tag", "source_step", "output_tag", "num_epochs", "num_iterations", "examples_per_step", "num_samples", "device_batch_size",
+    "task", "source_tag", "source_step", "output_tag", "num_epochs", "num_iterations", "examples_per_step", "num_samples", "device_batch_size",
     "max_new_tokens", "temperature", "top_k", "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr", "weight_decay",
     "init_lr_frac", "adapter_lr", "adapter_scalar_lr", "conv_lr", "ssm_lr", "eval_every", "eval_examples", "save_every",
     "push_model", "push_optim",
@@ -43,7 +44,7 @@ _KEYS = {
 # smaller than train's: rl fine-tunes an already-sft'd model, and init_lr_frac then scales them down
 # again before the linear ramp to zero.
 DEFAULTS = {
-    "num_epochs": 1, "examples_per_step": 16, "num_samples": 16, "device_batch_size": 8, "temperature": 1.0,
+    "task": "gsm8k", "num_epochs": 1, "examples_per_step": 16, "num_samples": 16, "device_batch_size": 8, "temperature": 1.0,
     "eval_every": 60, "eval_examples": 400, "save_every": 60, "init_lr_frac": 0.05,
     "unembedding_lr": 0.004, "embedding_lr": 0.2, "matrix_lr": 0.02, "scalar_lr": 0.5, "weight_decay": 0.0,
 }
@@ -53,13 +54,14 @@ def accepted_keys(cfg: dict) -> set:
     return _KEYS
 
 
-def _gsm8k_tasks(ctx):
-    """(train task, val task): GSM8K "main", train and test splits."""
-    from benchcore import GSM8K
+def _tasks(ctx, name):
+    """(train task, val task) of the benchcore chat task `name`. The task must score a completion
+    with a reward (`reward(conversation, completion)`), which is what the policy gradient trains on."""
     if ctx.remote is not None:
         remote_mod.pull_prefix(ctx.remote, remote_mod.TASK_DATA)
-    return (GSM8K(subset="main", split="train", cache_dir=get_base_dir()),
-            GSM8K(subset="main", split="test", cache_dir=get_base_dir()))
+    train, val = data.build_task(name, "train"), data.build_task(name, "test")
+    assert hasattr(train, "reward"), f"rl: task {name!r} has no reward() -- only a task that defines one can be trained on"
+    return train, val
 
 
 @torch.no_grad()
@@ -68,7 +70,7 @@ def _rollout(engine, tokenizer, task, example_idx, step, *, num_samples, device_
     """Samples num_samples completions of one training problem and turns them into one training
     batch: (sequences, inputs, targets, rewards, advantages). targets is -1 (ignore) wherever the
     Engine's mask is 0 -- the prompt and any tool-forced tokens -- so only sampled tokens train."""
-    assistant_end = tokenizer.encode_special("<|assistant_end|>")  # padding only; masked out of the loss
+    assistant_end = tokenizer.ids.assistant_end  # padding only; masked out of the loss
     conversation = task[example_idx]
     # Prime the Assistant for a completion: keep <|assistant_start|>, drop everything after it.
     tokens = tokenizer.render_for_completion(conversation)
@@ -164,7 +166,7 @@ def run(cfg: dict, ctx) -> dict:
     assert examples_per_step % ddp_world_size == 0, f"rl: examples_per_step ({examples_per_step}) must be divisible by world_size ({ddp_world_size})"
     examples_per_rank = examples_per_step // ddp_world_size
 
-    train_task, val_task = _gsm8k_tasks(ctx)
+    train_task, val_task = _tasks(ctx, cfg.get("task", defaults["task"]))
     num_steps = cfg.get("num_iterations") or (len(train_task) // examples_per_step) * num_epochs
     assert num_steps > 0, f"rl: {len(train_task)} training problems is fewer than examples_per_step={examples_per_step}"
     print0(f"[{cfg['name']}] {num_steps} steps, {examples_per_step * num_samples} sequences per step")

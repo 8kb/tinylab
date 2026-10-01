@@ -21,7 +21,7 @@ tinylab/
   readme.py              the per-entity README.md format (code-owned frontmatter + History)
   engine.py               KV-cached generation + calculator tool use
   chat.py                 the `chat` CLI command
-  data.py                 corpus identity: ClimbMix shard URLs, SmolTalk
+  data.py                 corpus identity: CORPORA (ClimbMix by default), SmolTalk, chat tasks by name
   ops/
     __init__.py            OPS registry + Context (device/managers, resume flag, passed explicitly)
     prepare.py              op: prepare
@@ -148,7 +148,7 @@ the job state file — see "Resume: the job state file" above.
   written) before it ever reaches tinylab. modelcore itself never sees a depth dial either way,
   only the resolved tree.
 - **`datacore.DataManager`** prepares a raw corpus into a packed, on-disk dataset and reads it back
-  as batches. `tinylab.data` is the layer that knows *which* corpus (ClimbMix's URL, SmolTalk's
+  as batches. `tinylab.data` is the layer that knows *which* corpus (a `CORPORA` entry's URL, SmolTalk's
   HuggingFace path) — datacore itself has no opinion on where data comes from.
 - **`benchcore.BenchManager`** scores a model against CORE or the chat-task suite. A `modelcore`
   model already satisfies `benchcore.Model` (it's `__call__(input_ids) -> logits` plus
@@ -177,7 +177,7 @@ with a compatible tokenizer.
   tokenizers/<name>/         tokenizer.pkl. Any number side by side; "default" is
                              copied from the bundled vocab on first use, every other name comes
                              from a "tokenizer" step
-  base_data_climbmix/        downloaded ClimbMix parquet shards
+  base_data_<corpus>/        downloaded parquet shards of a corpus (`base_data_climbmix/` by default)
   prepared/<dataset_name>/   a datacore dataset: packed sequences + manifest
   checkpoints/<tag>/         model_<step>.pt, meta_<step>.json (its own "model_config" key holds
                              the tree -- there is no separate config_<step>.json file),

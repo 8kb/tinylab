@@ -19,7 +19,7 @@ def test_accepted_keys_are_suite_aware():
     assert "model_tag" in bench.accepted_keys({"suite": "infer"})
     # The tokenizer suite measures the step's own tokenizer: no checkpoint to name.
     assert "model_tag" not in bench.accepted_keys({"suite": "tokenizer"})
-    assert {"suite", "baselines"} == bench.accepted_keys({"suite": "tokenizer"})
+    assert {"suite", "baselines", "corpus"} == bench.accepted_keys({"suite": "tokenizer"})
 
 
 def test_unknown_suite_is_an_error():

@@ -42,9 +42,9 @@ def main(job_path: str):
     top_k = cfg.get("top_k", DEFAULT_TOP_K)
     max_tokens = cfg.get("max_tokens", DEFAULT_MAX_NEW_TOKENS)
 
-    bos = tokenizer.get_bos_token_id()
-    user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
-    assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
+    ids = tokenizer.ids
+    bos, user_start, user_end = ids.bos, ids.user_start, ids.user_end
+    assistant_start, assistant_end = ids.assistant_start, ids.assistant_end
 
     def _one_turn(conversation_tokens, user_input):
         """Appends one user/assistant exchange to conversation_tokens (a list[int], mutated and

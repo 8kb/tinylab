@@ -91,7 +91,7 @@ key, its meaning, and its default** — this example only shows a handful.
 
 | `op` | what it does |
 |---|---|
-| `prepare` | Tokenizes and packs a corpus into a dataset. `"kind": "base"` downloads ClimbMix shards; `"kind": "sft"` builds a SmolTalk + MMLU + GSM8K conversation mixture. |
+| `prepare` | Tokenizes and packs a corpus into a dataset. `"kind": "base"` downloads the shards of a `"corpus"` (ClimbMix by default); `"kind": "sft"` builds a `"mixture"` of conversation tasks (SmolTalk + MMLU + GSM8K by default). |
 | `train` | One training loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a `source_tag`'d base checkpoint). `"save_every": N` checkpoints periodically, not just at the end. |
 | `bench` | Scores a checkpoint: `"suite": "core"` (DCLM's CORE benchmark) or `"suite": "chat"` (ARC, MMLU, GSM8K, HumanEval, plus the combined ChatCORE metric). |
 | `rl` | Reinforcement learning on GSM8K, starting from an `"sft"` checkpoint (REINFORCE-style, rewards from the task's own answer check). Writes a checkpoint like `train` does. |

@@ -38,22 +38,24 @@ fresh start or a continuation is a fact about the invocation, not the pipeline. 
 
 ## `prepare`
 
-`"kind": "base"` downloads and packs ClimbMix shards; `"kind": "sft"` builds the SmolTalk + MMLU +
-GSM8K conversation mixture. Required: `kind`.
+`"kind": "base"` downloads and packs the shards of a corpus (ClimbMix by default); `"kind": "sft"`
+builds a conversation mixture (SmolTalk + MMLU + GSM8K by default). Required: `kind`.
 
 | Key | Meaning | Default | Which `kind` |
 |---|---|---|---|
 | `kind` | `"base"` or `"sft"`. | required | both |
-| `dataset` | Output dataset name under `<base_dir>/prepared/`. | `{climbmix\|sft}_t<sequence_len>_<tokenizer fingerprint>` | both |
+| `dataset` | Output dataset name under `<base_dir>/prepared/`. | `{<corpus>\|sft}_t<sequence_len>_<tokenizer fingerprint>` (`corpus` defaults to `climbmix`) | both |
 | `sequences_per_volume` | Datacore's on-disk shard granularity. | `16384` | both |
 | `buffer_size` | Packer's best-fit lookback window. | `1000` | both |
 | `tokenizer_threads` | Parallel tokenization threads. | `os.cpu_count()` | both |
 | `push` | With a `remote`: upload each shard as it is written, and the manifest last (see [remote.md](remote.md)). `false` keeps the dataset local. | `true` | both |
-| `shards` | Number of ClimbMix train shards to download and pack (plus one fixed validation shard). | `8` | base |
+| `shards` | Number of train shards of the corpus to download and pack (plus one fixed validation shard). | `8` | base |
+| `corpus` | Which pretraining corpus: a name in `tinylab.data.CORPORA` (a URL template over shard indices; the last shard is validation). Adding a corpus is one entry there. | `"climbmix"` | base |
 | `max_conversations` | Caps both the train and val conversation mixtures (for a fast smoke run). | unset (full mixture) | sft |
-| `mmlu_epochs` | How many passes of MMLU's auxiliary-train split to mix into SFT training data. | `3` | sft |
-| `gsm8k_epochs` | Same, for GSM8K's train split. | `4` | sft |
-| `max_tokens_per_conversation` | Truncates any single rendered conversation past this many tokens. | `2048` | sft |
+| `mixture` | The SFT conversation mixture: a list of `{"task": ..., "epochs": N, "val_cap": M}` entries. `task` is `"smoltalk"` or a benchcore chat task (`ARC-Easy`, `ARC-Challenge`, `MMLU`, `GSM8K`; matched case-insensitively; each task's train split goes into the training data `epochs` times (default `1`), its test split into validation, capped at `val_cap` if given). The default is `[{"task": "smoltalk"}, {"task": "mmlu", "epochs": 3, "val_cap": 5200}, {"task": "gsm8k", "epochs": 4, "val_cap": 420}]`. | the default list | sft |
+| `mmlu_epochs` | Alias for the `epochs` of the default mixture's MMLU entry (`3`). Not allowed together with `mixture`. | `3` | sft |
+| `gsm8k_epochs` | Alias for the `epochs` of the default mixture's GSM8K entry (`4`). Not allowed together with `mixture`. | `4` | sft |
+| `max_tokens_per_conversation` | Truncates any single rendered conversation past this many tokens. | the step's `sequence_len` | sft |
 | `sft_padding_id` | Token id `BestFitPadPacker` pads with. | packer's own default | sft |
 
 ## `train`
@@ -79,6 +81,7 @@ included) lives in `modelcore.scaling`. Compute `total_batch_size`/`num_iteratio
 |---|---|---|---|
 | `kind` | `"base"` or `"sft"`. | required | both |
 | `dataset` | Which prepared dataset to train on. | same auto-name as `prepare` | both |
+| `corpus` | Only names the default `dataset` (`{<corpus>_t<sequence_len>_...}`); give the same value the `prepare` step used. | `"climbmix"` | base |
 | `output_tag` | Checkpoint tag this step writes to: `<base_dir>/checkpoints/<tag>/`. Arbitrary text, optionally with `/` folders (`nanogpt-d12-base`, `kvcache/d13-chat`) — see the glossary. An sft step's must differ from its own `source_tag`. | the step's own `name` | both |
 | `num_iterations` | Training horizon, in steps. | required (base) / one epoch over the dataset (sft, unset) | both |
 | `device_batch_size` | Micro-batch size per device, per forward/backward. | `4` | both |
@@ -122,7 +125,8 @@ default below matches our nanochat fork's own `scripts/tok_train.py`.
 
 | Key | Meaning | Default |
 |---|---|---|
-| `shards` | Number of ClimbMix train shards to download and read (plus the fixed validation shard) — same corpus `prepare`'s `kind: base` uses. | `8` |
+| `shards` | Number of train shards to download and read (plus the fixed validation shard) — the same corpus `prepare`'s `kind: base` uses. | `8` |
+| `corpus` | Which corpus (see `prepare`'s `corpus`). | `"climbmix"` |
 | `vocab_size` | Target vocab size, including the 9 special tokens (appended after training, never trained themselves). Must leave at least 256 ordinary tokens. | `32768` |
 | `doc_cap` | Truncates any single document to this many characters before it reaches the trainer. | `10000` |
 | `max_chars` | Stops reading once this many characters (post-`doc_cap`) have been seen. | `2000000000` |
@@ -145,7 +149,7 @@ records.
 tokenizer. `infer` is single-GPU CUDA only (a hard error elsewhere); its result carries the full
 static card (weight and KV bytes, theoretical decode ceiling) and, per batch size, TTFT, median
 per-token latency, throughput, MBU (decode's distance from the bandwidth roofline), MFU and peak
-VRAM. `tokenizer` also measures the first doc batch of the local ClimbMix train and val shards
+VRAM. `tokenizer` also measures the first doc batch of the local train and val shards of `corpus`
 when they are downloaded.
 
 | Key | Meaning | Default | Which `suite` |
@@ -163,33 +167,35 @@ when they are downloaded.
 | `temperature` | Sampling temperature (for `sample`: of the sampled completion — the other one is always greedy; for `infer`: of the timed decode). | `0.0` (chat, infer), `1.0` (sample) | chat, sample, infer |
 | `top_k` | Sampling top-k. | `50` | chat, sample |
 | `max_problems` | Caps problems per task (for a fast smoke run). Leave unset for a real run: uncapped GSM8K (~1319)/HumanEval (~164) is what `generative_batch_size` exists to make affordable. | unset (every problem) | chat |
-| `dataset` | Name of the prepared dataset to score (a `prepare` step's `dataset`). | derived from the model's `sequence_len` and the tokenizer | bpb |
+| `dataset` | Name of the prepared dataset to score (a `prepare` step's `dataset`). | derived from the model's `sequence_len`, the tokenizer and `corpus` | bpb |
+| `corpus` | `bpb`: which corpus the default `dataset` name refers to; `tokenizer`: whose local shards are measured too. | `"climbmix"` | bpb, tokenizer |
 | `split_tokens` | Tokens evaluated per split, rounded down to whole eval batches (at least one). | `20971520` | bpb |
 | `device_batch_size` | Sequences per forward in the eval loop. | `32` | bpb |
 | `prompts` | List of prompt strings to complete. | seven short factual prompts (`tinylab/bench_texts.py`) | sample |
-| `prompt_tokens` | Prompt length for prefill, clamped so prompt + `decode_tokens` fits the model's `sequence_len`. | `2048` | infer |
+| `prompt_tokens` | Prompt length for prefill, clamped so prompt + `decode_tokens` fits the model's `sequence_len`. | `sequence_len - decode_tokens` | infer |
 | `decode_tokens` | Tokens to generate per row. | `256` | infer |
 | `batch_sizes` | List of decode batch sizes to sweep. | `[1, 8, 32, 128]` | infer |
 | `baselines` | List of tiktoken encodings (`"gpt2"`, `"cl100k_base"`) to compare against. Their vocab files are downloaded on first use, so the default keeps the suite offline. | `[]` | tokenizer |
 
 ## `rl`
 
-Reinforcement learning on GSM8K, starting from an `sft` checkpoint: REINFORCE with token-level
+Reinforcement learning on a benchcore chat task (GSM8K by default), starting from an `sft` checkpoint: REINFORCE with token-level
 `(r - mean)` advantages, no KL term and no PPO clip (see `tinylab/ops/rl.py`). Each step samples
-`num_samples` completions for each of `examples_per_step` problems, rewards the right ones, and
+`num_samples` completions for each of `examples_per_step` problems, rewards them with the task's `reward()`, and
 takes one optimizer step; the LR ramps linearly to zero. Required: `source_tag`, `world_size`.
 Writes a checkpoint (with optimizer state) under `output_tag` whose meta says `"kind": "rl"` and
 whose config's `template` is `"chat_tools"`; its `step` counts completed updates. `--resume` works
 as for `train`: model and optimizer reload, a `world_size` mismatch is a hard error, and the
-problem/seed schedule continues where it stopped. Needs the GSM8K data (downloaded on first use,
+problem/seed schedule continues where it stopped. Needs the task's data (downloaded on first use,
 or pulled from the bucket's `task_data/`).
 
 | Key | Meaning | Default |
 |---|---|---|
+| `task` | The benchcore chat task to train on (case-insensitive; its train split supplies the problems, its test split the pass@k evaluation, its `reward()` the reward). Must define `reward()` — today only `GSM8K` does. | `"gsm8k"` |
 | `source_tag` | Checkpoint tag to start from — normally an `sft` step's `output_tag`. Must differ from `output_tag`. | required |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest |
 | `output_tag` | Checkpoint tag this step writes to. | the step's own `name` |
-| `num_epochs` | Epochs over the GSM8K train split; steps = `(problems // examples_per_step) * num_epochs`. | `1` |
+| `num_epochs` | Epochs over the task's train split; steps = `(problems // examples_per_step) * num_epochs`. | `1` |
 | `num_iterations` | Explicit number of steps, instead of the epoch-derived count (the LR ramp spans this horizon). For smoke runs and budget-capped runs. | unset (epoch-derived) |
 | `examples_per_step` | Problems per optimizer step, across all ranks (divisible by `world_size`). | `16` |
 | `num_samples` | Completions sampled per problem (a multiple of `device_batch_size`). | `16` |
@@ -207,7 +213,7 @@ or pulled from the bucket's `task_data/`).
 | `adapter_scalar_lr` | LR of DoRA's per-channel magnitude param. | modelcore's default |
 | `conv_lr` | LR of depthwise conv filters (`short_conv`, `canon`, `mamba2`/`mamba3` convs). | modelcore's default |
 | `ssm_lr` | LR of the SSM per-head vectors of `mamba2`/`mamba3` mixers. | modelcore's default |
-| `eval_every` | Evaluate pass@1..k on the GSM8K test split every N steps (and once at the end). `0` = never. | `60` |
+| `eval_every` | Evaluate pass@1..k on the task's test split every N steps (and once at the end). `0` = never. | `60` |
 | `eval_examples` | Test problems per evaluation. | `400` |
 | `save_every` | Save a checkpoint every N completed steps (the last step always saves). `0` (or `<= 0`) = only the last; same meaning as `train`'s `save_every`. | `60` |
 | `push_model` | Which saved steps' model+meta go to the bucket (same policy as `train`). | `"last"` |

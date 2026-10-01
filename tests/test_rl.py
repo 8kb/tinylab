@@ -37,7 +37,7 @@ class _FakeGSM8K:
 
 @pytest.fixture(autouse=True)
 def fake_gsm8k(monkeypatch):
-    monkeypatch.setattr(rl, "_gsm8k_tasks", lambda ctx: (_FakeGSM8K(), _FakeGSM8K()))
+    monkeypatch.setattr(rl, "_tasks", lambda ctx, name: (_FakeGSM8K(), _FakeGSM8K()))
 
 
 def _cfg(source_tag, **overrides):
@@ -86,3 +86,14 @@ def test_num_iterations_caps_the_run(base_dir, tiny_checkpoint):
     out = rl.run(_cfg(tiny_checkpoint, num_iterations=1), Context(device_type="cpu"))
     assert out["step"] == 1
     assert _meta(base_dir, 1)["step"] == 1
+
+
+def test_a_task_without_a_reward_is_refused(tiny_checkpoint, monkeypatch):
+    class NoReward(_FakeGSM8K):
+        reward = property(lambda self: (_ for _ in ()).throw(AttributeError("no reward")))
+
+    from tinylab import data
+    monkeypatch.undo()  # use the real _tasks, with the build stubbed
+    monkeypatch.setattr(data, "build_task", lambda name, split, **kw: NoReward())
+    with pytest.raises(AssertionError, match="no reward"):
+        rl._tasks(Context(device_type="cpu"), "arc-easy")

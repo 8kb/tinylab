@@ -75,9 +75,9 @@ def test_tokenizer_op_trains_and_writes_a_real_tokenizer_against_a_local_fixture
     train_path, val_path = _write_fake_climbmix_parquet(base_dir)
 
     from tinylab import data
-    monkeypatch.setattr(data, "climbmix_train_val_paths", lambda num_train_shards: ([train_path], [val_path]))
+    monkeypatch.setattr(data, "corpus_train_val_paths", lambda num_train_shards, corpus=data.DEFAULT_CORPUS: ([train_path], [val_path]))
     downloaded = []
-    monkeypatch.setattr(data, "download_climbmix_shards", lambda n, num_workers=4, log=print: downloaded.append(n))
+    monkeypatch.setattr(data, "download_corpus_shards", lambda n, corpus=data.DEFAULT_CORPUS, num_workers=4, log=print: downloaded.append(n))
 
     cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1}
     result = tokenizer_run(cfg, Context(device_type="cpu"))
@@ -100,13 +100,13 @@ def test_tokenizer_op_downloads_missing_shards(base_dir, monkeypatch):
     from tinylab import data
     downloaded = []
 
-    def fake_download(n, num_workers=4, log=print):
+    def fake_download(n, corpus=None, num_workers=4, log=print):
         downloaded.append(n)
         return _write_fake_climbmix_parquet(base_dir)[0]
 
-    monkeypatch.setattr(data, "download_climbmix_shards", fake_download)
-    monkeypatch.setattr(data, "climbmix_train_val_paths",
-                         lambda num_train_shards: ([os.path.join(base_dir, "base_data_climbmix", "shard_00000.parquet")],
+    monkeypatch.setattr(data, "download_corpus_shards", fake_download)
+    monkeypatch.setattr(data, "corpus_train_val_paths",
+                         lambda num_train_shards, corpus=data.DEFAULT_CORPUS: ([os.path.join(base_dir, "base_data_climbmix", "shard_00000.parquet")],
                                                     [os.path.join(base_dir, "base_data_climbmix", "shard_06542.parquet")]))
 
     cfg = {"name": "tok", "op": "tokenizer", "vocab_size": _MIN_VOCAB_SIZE + 10, "shards": 1}
@@ -117,8 +117,8 @@ def test_tokenizer_op_downloads_missing_shards(base_dir, monkeypatch):
 def _patch_fixture_shards(base_dir, monkeypatch):
     train_path, val_path = _write_fake_climbmix_parquet(base_dir)
     from tinylab import data
-    monkeypatch.setattr(data, "climbmix_train_val_paths", lambda num_train_shards: ([train_path], [val_path]))
-    monkeypatch.setattr(data, "download_climbmix_shards", lambda n, num_workers=4, log=print: None)
+    monkeypatch.setattr(data, "corpus_train_val_paths", lambda num_train_shards, corpus=data.DEFAULT_CORPUS: ([train_path], [val_path]))
+    monkeypatch.setattr(data, "download_corpus_shards", lambda n, corpus=data.DEFAULT_CORPUS, num_workers=4, log=print: None)
 
 
 def test_tokenizer_op_writes_to_the_named_output_and_leaves_the_default_alone(base_dir, monkeypatch):

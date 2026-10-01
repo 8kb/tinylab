@@ -1,8 +1,8 @@
 """
 The `prepare` op: tokenize + pack a corpus into a datacore dataset. Ported from our nanochat fork's
-scripts/data_prep.py -- kind="base" downloads ClimbMix shards (if not already present) and packs
-them with BestFitCropPacker; kind="sft" builds the SmolTalk + MMLU + GSM8K conversation mixture and
-packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this module reads.
+scripts/data_prep.py -- kind="base" downloads the shards of a corpus (data.CORPORA, "corpus" key; if
+not already present) and packs them with BestFitCropPacker; kind="sft" builds the conversation
+mixture ("mixture"; SmolTalk + MMLU + GSM8K by default) and packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this module reads.
 """
 import os
 import time
@@ -14,15 +14,25 @@ from datacore import (
 
 from tinylab import data
 from tinylab.runtime import get_base_dir, print0
-from tinylab.tokenizer import DEFAULT_MAX_TOKENS_PER_CONVERSATION, bucket_entity
+from tinylab.tokenizer import bucket_entity
 
 # Keys shared by both kinds, plus each kind's own -- see accepted_keys() below, which is kind-
 # aware so e.g. "mmlu_epochs" on a kind="base" step is caught as an error rather than silently
 # accepted and ignored. "tokenizer" is already in ops.COMMON_KEYS (every op accepts it -- it's the
 # step's own tokenizer selection, see Context.tokenizer_for), so it isn't repeated here.
 _COMMON_KEYS = {"kind", "dataset", "sequences_per_volume", "buffer_size", "tokenizer_threads", "push"}
-_BASE_KEYS = {"shards"}
-_SFT_KEYS = {"max_conversations", "mmlu_epochs", "gsm8k_epochs", "max_tokens_per_conversation", "sft_padding_id"}
+_BASE_KEYS = {"shards", "corpus"}
+_SFT_KEYS = {"max_conversations", "mixture", "mmlu_epochs", "gsm8k_epochs", "max_tokens_per_conversation", "sft_padding_id"}
+
+# The SFT conversation mixture: entries are {"task", "epochs", "val_cap"} -- `task` is "smoltalk" or a
+# benchcore chat task (see data.build_task); `epochs` passes of its train split go into the training
+# data (default 1); `val_cap` caps its test split in the validation mixture (default: uncapped).
+DEFAULT_MIXTURE = [
+    {"task": "smoltalk"},
+    {"task": "mmlu", "epochs": 3, "val_cap": 5200},
+    {"task": "gsm8k", "epochs": 4, "val_cap": 420},
+]
+_MIXTURE_ENTRY_KEYS = {"task", "epochs", "val_cap"}
 
 
 def accepted_keys(cfg: dict) -> set:
@@ -35,8 +45,8 @@ def prepared_dir(name: str) -> str:
     return os.path.join(get_base_dir(), "prepared", name)
 
 
-def default_dataset_name(kind: str, sequence_len: int, tokenizer) -> str:
-    stem = "climbmix" if kind == "base" else "sft"
+def default_dataset_name(kind: str, sequence_len: int, tokenizer, corpus: str = data.DEFAULT_CORPUS) -> str:
+    stem = corpus if kind == "base" else "sft"
     return f"{stem}_t{sequence_len}_{tokenizer.fingerprint()}"
 
 
@@ -58,7 +68,7 @@ def open_prepared(cfg, ctx, kind, sequence_len, tokenizer):
     FileNotFoundError propagate unexplained) if it hasn't been prepared yet, or was prepared with a
     different sequence_len or tokenizer than this step is using. Returns (dataset_name, dataset,
     token_bytes) -- token_bytes is the per-token-id byte-length table evaluate_bpb needs."""
-    dataset_name = cfg.get("dataset") or default_dataset_name(kind, sequence_len, tokenizer)
+    dataset_name = cfg.get("dataset") or default_dataset_name(kind, sequence_len, tokenizer, cfg.get("corpus", data.DEFAULT_CORPUS))
     dataset_dir = prepared_dir(dataset_name)
     if ctx.remote is not None:
         # Missing shards stream in from the bucket while training runs on the ones already local.
@@ -86,19 +96,20 @@ def open_prepared(cfg, ctx, kind, sequence_len, tokenizer):
 
 
 def _prepare_base(cfg, ctx, sequence_len, tokenizer):
-    """kind="base": ensures cfg["shards"] ClimbMix train shards (plus the fixed val shard) are on
+    """kind="base": ensures cfg["shards"] train shards of cfg["corpus"] (plus the fixed val shard) are on
     disk, downloading whatever's missing, then packs exactly those paths -- never however many
     shard files a larger previous run happened to leave around. Returns (dataset_name, dataset_dir,
     manifest)."""
     manager = ctx.data_manager
-    dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, tokenizer)
+    corpus = cfg.get("corpus", data.DEFAULT_CORPUS)
+    dataset_name = cfg.get("dataset") or default_dataset_name("base", sequence_len, tokenizer, corpus)
     dataset_dir = prepared_dir(dataset_name)
     store = _make_store(cfg, ctx, dataset_name, dataset_dir)
 
     shards = cfg.get("shards", 8)
-    train_paths, val_paths = data.climbmix_train_val_paths(shards)
+    train_paths, val_paths = data.corpus_train_val_paths(shards, corpus)
     if any(not os.path.exists(p) for p in train_paths + val_paths):
-        data.download_climbmix_shards(shards, log=print0)
+        data.download_corpus_shards(shards, corpus, log=print0)
         missing = [p for p in train_paths + val_paths if not os.path.exists(p)]
         assert not missing, f"still missing after download: {missing}"
     print0(f"Preparing base dataset {dataset_name!r}: {len(train_paths)} train shard(s), {len(val_paths)} val shard(s) -> {dataset_dir}")
@@ -115,31 +126,39 @@ def _prepare_base(cfg, ctx, sequence_len, tokenizer):
     return dataset_name, dataset_dir, manifest
 
 
+def resolve_mixture(cfg):
+    """The step's mixture as a validated list of entries: "mixture" if given, else DEFAULT_MIXTURE
+    with the older "mmlu_epochs"/"gsm8k_epochs" keys (kept as aliases) applied. Giving both forms is
+    an error."""
+    legacy = {name: cfg[key] for name, key in (("mmlu", "mmlu_epochs"), ("gsm8k", "gsm8k_epochs")) if key in cfg}
+    if "mixture" in cfg:
+        assert not legacy, 'prepare: "mixture" replaces "mmlu_epochs"/"gsm8k_epochs" -- give one or the other'
+        mixture = cfg["mixture"]
+    else:
+        mixture = [dict(entry, epochs=legacy.get(entry["task"], entry.get("epochs", 1))) for entry in DEFAULT_MIXTURE]
+    assert isinstance(mixture, list) and mixture, 'prepare: "mixture" must be a non-empty list of {"task": ...} entries'
+    for entry in mixture:
+        assert isinstance(entry, dict) and "task" in entry, f'prepare: mixture entry {entry!r} needs a "task"'
+        unknown = set(entry) - _MIXTURE_ENTRY_KEYS
+        assert not unknown, f"prepare: mixture entry {entry!r} has unknown key(s) {sorted(unknown)}; accepted: {sorted(_MIXTURE_ENTRY_KEYS)}"
+        if entry["task"].lower() != "smoltalk":
+            data.chat_task_name(entry["task"])  # raises ValueError for an unknown task
+        assert entry.get("epochs", 1) >= 1, f"prepare: mixture entry {entry!r}: epochs must be >= 1"
+    return mixture
+
+
 def _build_sft_mixtures(cfg, ctx):
-    """Builds (train_mixture, val_mixture): SmolTalk + cfg["mmlu_epochs"] passes of MMLU's
-    auxiliary-train split + cfg["gsm8k_epochs"] passes of GSM8K's train split for train; a smaller
-    fixed val mixture (SmolTalk's own test split, plus capped MMLU/GSM8K test slices). Each is
+    """Builds (train_mixture, val_mixture) from resolve_mixture(cfg): each entry's train split, `epochs`
+    times, for train; its test split (capped at `val_cap`, if given) for val. Each mixture is
     truncated to cfg["max_conversations"] if given, for a fast smoke-sized run."""
-    from benchcore import GSM8K, MMLU
-    cache_dir = get_base_dir()
-    mmlu_epochs = cfg.get("mmlu_epochs", 3)
-    gsm8k_epochs = cfg.get("gsm8k_epochs", 4)
-    train_tasks = [
-        data.SmolTalk(split="train"),
-        *[MMLU(subset="all", split="auxiliary_train", cache_dir=cache_dir) for _ in range(mmlu_epochs)],
-        *[GSM8K(subset="main", split="train", cache_dir=cache_dir) for _ in range(gsm8k_epochs)],
-    ]
+    mixture = resolve_mixture(cfg)
+    train_tasks = [data.build_task(entry["task"], "train") for entry in mixture for _ in range(entry.get("epochs", 1))]
+    val_tasks = [data.build_task(entry["task"], "test", **({"stop": entry["val_cap"]} if "val_cap" in entry else {}))
+                 for entry in mixture]
     # max_conversations (smoke tests) caps both mixtures via ExampleMixture's own stop= kwarg --
-    # __len__ clamps stop to each mixture's true length itself, so this needs no separate
-    # min(max_conversations, len(val_mixture)) either -- see datacore.records.ExampleSet.
+    # __len__ clamps stop to each mixture's true length itself, see datacore.records.ExampleSet.
     max_conversations = cfg.get("max_conversations")
-    train_mixture = ExampleMixture(train_tasks, stop=max_conversations)
-    val_mixture = ExampleMixture([
-        data.SmolTalk(split="test"),
-        MMLU(subset="all", split="test", cache_dir=cache_dir, stop=5200),
-        GSM8K(subset="main", split="test", cache_dir=cache_dir, stop=420),
-    ], stop=max_conversations)
-    return train_mixture, val_mixture
+    return ExampleMixture(train_tasks, stop=max_conversations), ExampleMixture(val_tasks, stop=max_conversations)
 
 
 def _prepare_sft(cfg, ctx, sequence_len, tokenizer):
@@ -154,7 +173,7 @@ def _prepare_sft(cfg, ctx, sequence_len, tokenizer):
     train_mixture, val_mixture = _build_sft_mixtures(cfg, ctx)
     print0(f"Preparing SFT dataset {dataset_name!r}: {len(train_mixture):,} train conversations, {len(val_mixture):,} val -> {dataset_dir}")
 
-    max_tokens = cfg.get("max_tokens_per_conversation", DEFAULT_MAX_TOKENS_PER_CONVERSATION)
+    max_tokens = cfg.get("max_tokens_per_conversation", sequence_len)
     bos_id = tokenizer.get_bos_token_id()
     render = lambda conversation: tokenizer.render_conversation(conversation, max_tokens=max_tokens)
     sources = {
