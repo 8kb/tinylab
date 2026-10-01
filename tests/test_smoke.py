@@ -18,11 +18,11 @@ from tinylab.ops import Context
 from tinylab.ops.train import run as train_run
 from tinylab.tokenizer import get_tokenizer
 
-# A materialized 2-layer gpt tree at sequence_len=32, vocab_size=32768 (the bundled default
-# tokenizer's own vocab size) -- generated once via llmllab/tools/make_config.py --arch gpt
+# A materialized 2-layer nanogpt tree at sequence_len=32, vocab_size=32768 (the bundled default
+# tokenizer's own vocab size) -- generated once via llmllab/tools/make_config.py --arch nanogpt
 # --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768.
 # tinylab does no preset/depth-dial derivation of its own any more -- see AGENTS.md.
-_TINY_GPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
+_TINY_NANOGPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "nanogpt_tiny.json")
 
 pytestmark = pytest.mark.slow
 
@@ -70,7 +70,7 @@ def test_train_then_load_then_generate(base_dir):
     ctx = Context(device_type="cpu")
     cfg = {
         "name": "pre", "op": "train", "kind": "base", "dataset": "smoke", "sequence_len": sequence_len,
-        "model_config": _TINY_GPT_CONFIG,
+        "model_config": _TINY_NANOGPT_CONFIG,
         "device_batch_size": 2, "total_batch_size": 64, "num_iterations": 3, "world_size": 1,
         "eval_every": 3, "eval_tokens": 64,
     }
@@ -104,14 +104,14 @@ def test_train_then_load_then_generate(base_dir):
 
 def test_sft_step_reads_one_tag_writes_another_and_declares_the_chat_template(base_dir):
     """The flat checkpoint namespace end to end: an sft step reads a base tag, writes a *nested* tag,
-    records its provenance, and stamps the nanochat template (a base run keeps "base")."""
+    records its provenance, and stamps the chat_tools template (a base run keeps "base")."""
     tokenizer = get_tokenizer(base_dir)
     sequence_len = 32
     _prepare_fake_dataset(base_dir, tokenizer, sequence_len)
     ctx = Context(device_type="cpu")
     common = {"op": "train", "dataset": "smoke", "sequence_len": sequence_len, "device_batch_size": 2,
               "total_batch_size": 64, "world_size": 1, "eval_every": 2, "eval_tokens": 64}
-    train_run(dict(common, name="pre", kind="base", model_config=_TINY_GPT_CONFIG, num_iterations=2), ctx)
+    train_run(dict(common, name="pre", kind="base", model_config=_TINY_NANOGPT_CONFIG, num_iterations=2), ctx)
     result = train_run(dict(common, name="chat", kind="sft", source_tag="pre", output_tag="kvcache/d13-chat",
                             num_iterations=2), ctx)
 
@@ -120,7 +120,7 @@ def test_sft_step_reads_one_tag_writes_another_and_declares_the_chat_template(ba
     _, _, base_meta = load_model("pre", torch.device("cpu"), phase="eval")
     _, _, sft_meta = load_model("kvcache/d13-chat", torch.device("cpu"), phase="eval")
     assert base_meta["model_config"]["template"] == "base"
-    assert sft_meta["model_config"]["template"] == "nanochat"
+    assert sft_meta["model_config"]["template"] == "chat_tools"
     assert sft_meta["base_model_tag"] == "pre"
     assert sft_meta["model_config"]["tokenizer"] == tokenizer.descriptor("default")
 

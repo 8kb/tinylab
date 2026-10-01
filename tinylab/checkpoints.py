@@ -5,7 +5,7 @@ checkpoint_manager.py -- the actual model/optimizer artifact format belongs to m
 right directory+step. See docs/architecture.md's "On-disk layout" for meta.json's full field list.
 
 There is one checkpoint namespace, <base_dir>/checkpoints/<tag>/, and the tag is the whole address:
-arbitrary text, optionally with folders ("gpt-d12-base", "kvcache/d13-chat"). What *kind* of
+arbitrary text, optionally with folders ("nanogpt-d12-base", "kvcache/d13-chat"). What *kind* of
 checkpoint it is (pretrained, fine-tuned, whatever comes next) is the job author's to say in the
 tag, not something the path encodes -- an earlier base_checkpoints/ + chatsft_checkpoints/ split
 would have needed a new directory for every new kind.
@@ -51,7 +51,7 @@ def validate_experiment(name):
 
 
 def validate_tag(tag, *, label="checkpoint tag"):
-    """A tag is 1-4 "/"-joined names (see validate_name) -- e.g. "gpt-d12-base" or
+    """A tag is 1-4 "/"-joined names (see validate_name) -- e.g. "nanogpt-d12-base" or
     "kvcache/d13-chat". `label` only changes the wording of a raised error, so the same validator
     serves checkpoint tags (output_tag/source_tag/model_tag) and any other "/"-joined path segment
     under <base_dir> that needs the same treatment. Returns tag."""
@@ -172,7 +172,7 @@ def resume_point(ctx, name, tag, world_size):
 
 # The chat template a sft/rl checkpoint declares (see modelcore's TEMPLATES); a base checkpoint keeps
 # whatever its model_config said.
-CHAT_TEMPLATE = "nanochat"
+CHAT_TEMPLATE = "chat_tools"
 
 
 def checkpoint_config(real_config, tokenizer, tokenizer_name, *, chat):

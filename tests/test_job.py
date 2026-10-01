@@ -442,7 +442,7 @@ def test_a_malformed_checkpoint_tag_is_a_job_error_before_anything_runs(tmp_path
         job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))
 
 
-@pytest.mark.parametrize("good", ["gpt-d12-base", "kvcache/d13-chat", "exp/2026-09/run3", "d12", "a_b"])
+@pytest.mark.parametrize("good", ["nanogpt-d12-base", "kvcache/d13-chat", "exp/2026-09/run3", "d12", "a_b"])
 def test_any_reasonable_checkpoint_tag_is_accepted(tmp_path, good):
     doc = _train_job(output_tag=good)
     assert job.resolve_steps(job.load(_write_job(tmp_path, doc)), job_dir=str(tmp_path))[0]["output_tag"] == good

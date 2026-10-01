@@ -56,7 +56,7 @@ def _patch_fixture_shards(base_dir, monkeypatch):
 
 
 def _write_tiny_gpt_config(path, vocab_size, sequence_len=32, n_embd=32, n_head=2, head_dim=16):
-    """A 1-layer gpt tree, shaped like tests/fixtures/gpt_tiny.json but parameterized by
+    """A 1-layer nanogpt tree, shaped like tests/fixtures/nanogpt_tiny.json but parameterized by
     vocab_size -- each tokenizer in this test needs its own model config, since a train step's
     model_config.vocab_size must match its tokenizer's (checkpoints.build_model asserts this)."""
     config = {

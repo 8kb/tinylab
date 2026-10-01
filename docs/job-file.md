@@ -79,7 +79,7 @@ included) lives in `modelcore.scaling`. Compute `total_batch_size`/`num_iteratio
 |---|---|---|---|
 | `kind` | `"base"` or `"sft"`. | required | both |
 | `dataset` | Which prepared dataset to train on. | same auto-name as `prepare` | both |
-| `output_tag` | Checkpoint tag this step writes to: `<base_dir>/checkpoints/<tag>/`. Arbitrary text, optionally with `/` folders (`gpt-d12-base`, `kvcache/d13-chat`) — see the glossary. An sft step's must differ from its own `source_tag`. | the step's own `name` | both |
+| `output_tag` | Checkpoint tag this step writes to: `<base_dir>/checkpoints/<tag>/`. Arbitrary text, optionally with `/` folders (`nanogpt-d12-base`, `kvcache/d13-chat`) — see the glossary. An sft step's must differ from its own `source_tag`. | the step's own `name` | both |
 | `num_iterations` | Training horizon, in steps. | required (base) / one epoch over the dataset (sft, unset) | both |
 | `device_batch_size` | Micro-batch size per device, per forward/backward. | `4` | both |
 | `total_batch_size` | Tokens per optimizer step, across grad-accum and all ranks; must be a multiple of `device_batch_size * sequence_len * world_size`. | required | both |
@@ -179,7 +179,7 @@ Reinforcement learning on GSM8K, starting from an `sft` checkpoint: REINFORCE wi
 `num_samples` completions for each of `examples_per_step` problems, rewards the right ones, and
 takes one optimizer step; the LR ramps linearly to zero. Required: `source_tag`, `world_size`.
 Writes a checkpoint (with optimizer state) under `output_tag` whose meta says `"kind": "rl"` and
-whose config's `template` is `"nanochat"`; its `step` counts completed updates. `--resume` works
+whose config's `template` is `"chat_tools"`; its `step` counts completed updates. `--resume` works
 as for `train`: model and optimizer reload, a `world_size` mismatch is a hard error, and the
 problem/seed schedule continues where it stopped. Needs the GSM8K data (downloaded on first use,
 or pulled from the bucket's `task_data/`).
@@ -257,7 +257,7 @@ one dataset directory even with everything else (kind, sequence_len) identical.
 ## Glossary: `output_tag`, `source_tag`, `model_tag`, and what a tag is
 
 There is one checkpoint namespace, `<base_dir>/checkpoints/<tag>/`, and **the tag is the whole
-address**. It is 1 to 4 `/`-joined names: `gpt-d12-base`, `kvcache/d13-chat`,
+address**. It is 1 to 4 `/`-joined names: `nanogpt-d12-base`, `kvcache/d13-chat`,
 `experiments/run3`. Each name is 1-16 characters from `[A-Za-z0-9_-]` — letters, digits, `_`, `-`,
 nothing else (`tinylab.checkpoints.validate_name`/`validate_tag`). What *kind* of checkpoint it is
 — pretrained, fine-tuned, whatever comes next — is yours to say in the tag; nothing in the path
@@ -276,4 +276,8 @@ A pipeline has no dependency graph; each step names what it needs by tag instead
 `jobs/smoke.json`, `"sft"` finds `"pre"`'s checkpoint via `"source_tag": "pre"`, and the `"core"`
 bench step finds `"sft"`'s checkpoint via `"model_tag": "sft"` — that works only because a `train`
 step's output tag defaults to its own step name. Give steps explicit tags when you want the name to
-say more (`"output_tag": "gpt-d12-base"`).
+say more (`"output_tag": "nanogpt-d12-base"`).
+
+**Convention for experiments:** `<experiment>/<arm>/<base|sft|rl>` (e.g. `exp01/m1/sft`), so the
+last segment says what the checkpoint is and a bucket README folder groups an arm's stages. The smoke
+job keeps bare step names; the convention is for anything that is pushed or compared.

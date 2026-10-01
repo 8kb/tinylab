@@ -13,7 +13,7 @@ from tinylab.engine import Engine, use_calculator
 from tinylab.modelconfig import load_model_config
 from tinylab.tokenizer import get_tokenizer
 
-_TINY_GPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
+_TINY_NANOGPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "nanogpt_tiny.json")
 
 
 def _awake_engine(base_dir, seed=0):
@@ -21,7 +21,7 @@ def _awake_engine(base_dir, seed=0):
     zero-initialized (see modelcore/AGENTS.md), so its logits are a function of the token embedding
     alone until woken -- same helper as modelcore/tests/test_generate.py's _build_awake."""
     tokenizer = get_tokenizer(base_dir=base_dir)
-    config = load_model_config(_TINY_GPT_CONFIG, sequence_len=32, vocab_size=tokenizer.get_vocab_size())
+    config = load_model_config(_TINY_NANOGPT_CONFIG, sequence_len=32, vocab_size=tokenizer.get_vocab_size())
     manager = ModelManager()
     model = manager.create_model(config, device=torch.device("cpu"), seed=seed)
     g = torch.Generator().manual_seed(seed + 1)

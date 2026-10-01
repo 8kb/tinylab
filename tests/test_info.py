@@ -9,7 +9,7 @@ import pytest
 from modelcore import ModelConfig, ModelManager
 from modelcore import derive_training_plan
 
-from conftest import TINY_GPT_CONFIG
+from conftest import TINY_NANOGPT_CONFIG
 from tinylab import info
 
 
@@ -19,12 +19,12 @@ def _run(argv, capsys):
 
 
 def _tiny_stats():
-    with open(TINY_GPT_CONFIG) as f:
+    with open(TINY_NANOGPT_CONFIG) as f:
         return ModelManager().stats(ModelConfig.from_dict(json.load(f)))
 
 
 def test_config_file_json_shape(capsys):
-    rc, out = _run([TINY_GPT_CONFIG, "--json"], capsys)
+    rc, out = _run([TINY_NANOGPT_CONFIG, "--json"], capsys)
     row = json.loads(out)
     assert rc == 0
     assert {"shape", "params", "flops", "kv_cache", "training_plan"} <= set(row)
@@ -37,7 +37,7 @@ def test_config_file_json_shape(capsys):
 
 
 def test_plan_equals_derive_training_plan_directly(capsys):
-    _rc, out = _run([TINY_GPT_CONFIG, "--target-flops", "1e12", "--target-param-data-ratio", "8", "--d-ref-scaling-params", "123456", "--json"], capsys)
+    _rc, out = _run([TINY_NANOGPT_CONFIG, "--target-flops", "1e12", "--target-param-data-ratio", "8", "--d-ref-scaling-params", "123456", "--json"], capsys)
     plan = json.loads(out)["training_plan"]
     stats = _tiny_stats()
     expected = derive_training_plan(
@@ -50,7 +50,7 @@ def test_plan_equals_derive_training_plan_directly(capsys):
 
 
 def test_default_plan_is_ratio_12_with_itself_as_d_ref(capsys):
-    _rc, out = _run([TINY_GPT_CONFIG, "--json"], capsys)
+    _rc, out = _run([TINY_NANOGPT_CONFIG, "--json"], capsys)
     plan = json.loads(out)["training_plan"]
     stats = _tiny_stats()
     assert plan["horizon_source"] == "target_param_data_ratio"
@@ -59,8 +59,8 @@ def test_default_plan_is_ratio_12_with_itself_as_d_ref(capsys):
 
 
 def test_gpu_hours_are_independent_of_num_gpus(capsys):
-    _rc, one = _run([TINY_GPT_CONFIG, "--gpu", "NVIDIA H100", "--json"], capsys)
-    _rc, four = _run([TINY_GPT_CONFIG, "--gpu", "NVIDIA H100", "--num-gpus", "4", "--json"], capsys)
+    _rc, one = _run([TINY_NANOGPT_CONFIG, "--gpu", "NVIDIA H100", "--json"], capsys)
+    _rc, four = _run([TINY_NANOGPT_CONFIG, "--gpu", "NVIDIA H100", "--num-gpus", "4", "--json"], capsys)
     a, b = json.loads(one)["training_plan"], json.loads(four)["training_plan"]
     assert a["gpu_hours"] == pytest.approx(b["gpu_hours"])
     assert b["wall_clock_hours"] == pytest.approx(a["wall_clock_hours"] / 4)
@@ -73,7 +73,7 @@ def fake_checkpoint(base_dir):
     tag_dir = os.path.join(base_dir, "checkpoints", "fake")
     os.makedirs(tag_dir)
     open(os.path.join(tag_dir, "model_000010.pt"), "w").close()
-    with open(TINY_GPT_CONFIG) as f:
+    with open(TINY_NANOGPT_CONFIG) as f:
         model_config = json.load(f)
     meta = {"step": 10, "val_bpb": 1.25, "total_batch_size": 2048, "total_training_time": 90.0,
             "tokenizer_fingerprint": "deadbeef", "model_config": model_config}
@@ -106,7 +106,7 @@ def test_fingerprint_mismatch_is_flagged(fake_checkpoint, capsys):
 
 
 def test_list_targets(capsys):
-    rc, out = _run([TINY_GPT_CONFIG, "--list-targets", "--json"], capsys)
+    rc, out = _run([TINY_NANOGPT_CONFIG, "--list-targets", "--json"], capsys)
     targets = json.loads(out)
     assert rc == 0 and targets
     assert any(t["target"].endswith("mixer.c_q") for t in targets)
@@ -120,16 +120,16 @@ def test_unknown_source_is_a_clean_error(base_dir, capsys):
 
 def test_main_dispatches_info(capsys):
     from tinylab.__main__ import main
-    assert main(["info", TINY_GPT_CONFIG, "--json"]) == 0
+    assert main(["info", TINY_NANOGPT_CONFIG, "--json"]) == 0
     assert "params" in json.loads(capsys.readouterr().out)
 
 
 @pytest.mark.parametrize("fixture,expected", [
-    ("gpt_tiny.json", ["attention"]),
+    ("nanogpt_tiny.json", ["attention"]),
     ("hybrid_conv_tiny.json", None),  # filled in below from the fixture's own blocks
 ])
 def test_mixer_types_come_from_the_tree_not_the_preset_label(fixture, expected):
-    path = os.path.join(os.path.dirname(TINY_GPT_CONFIG), fixture)
+    path = os.path.join(os.path.dirname(TINY_NANOGPT_CONFIG), fixture)
     with open(path) as f:
         raw = json.load(f)
     config = ModelConfig.from_dict(raw)

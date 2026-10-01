@@ -61,7 +61,7 @@ point is to prove the plumbing works end to end, not to produce something worth 
     "device": "auto",
     "sequence_len": 2048,
     "world_size": 1,
-    "model_config": "configs/gpt_d4.json",
+    "model_config": "configs/nanogpt_d4.json",
     "experiment": "scratch"
   },
   "steps": [

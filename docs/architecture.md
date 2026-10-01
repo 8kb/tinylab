@@ -183,7 +183,7 @@ with a compatible tokenizer.
                              the tree -- there is no separate config_<step>.json file),
                              optim_<step>_rank<r>.pt; multiple steps coexist, none pruned locally.
                              <tag> is 1-4 "/"-joined names, each 1-16 chars from [A-Za-z0-9_-]
-                             ("gpt-d12-base", "kvcache/d13-chat")
+                             ("nanogpt-d12-base", "kvcache/d13-chat")
   job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
   experiments/<experiment>/  a job's required "experiment" key (1-64 chars from [A-Za-z0-9_-], the
                              name of the experiment card's folder in git, or "scratch"; no built-in
@@ -276,9 +276,10 @@ the tokenizer to load in order: an explicit `tokenizer_spec` argument (the calle
 `"tokenizer"`, if set) if given, else that recorded name, else the default. The existing vocab-size
 assert and fingerprint check then catch a wrong *selection*.
 
-`ops.train` also stamps `template`: a `kind: sft` checkpoint declares `"nanochat"` (the chat format
+`ops.train` also stamps `template`: a `kind: sft` checkpoint declares `"chat_tools"` (the chat format
 `tinylab.tokenizer.render_conversation` renders), a base one keeps whatever its `model_config` said.
-Declarative only for now — modelcore validates it is a known template and nothing else reads it.
+Declarative: modelcore only checks it is a known template (`base`/`chat_tools`; the former name
+`nanochat` loads as an alias and is re-saved as `chat_tools`), and nothing reads it yet.
 
 `meta_<step>.json` carries: `step`, `val_bpb`, `min_val_bpb` (the run's best `val_bpb` so far, across
 resumes), `smooth_train_loss` (an EMA of the per-step train loss, across resumes),
@@ -291,6 +292,19 @@ unresolved shape), `device_batch_size`, `max_seq_len`, `total_batch_size`, `data
 and `tokenizer` blocks. `tinylab.checkpoints.build_model` cross-checks
 `tokenizer_fingerprint` against the currently-loaded tokenizer before returning a model — a vocab-
 size match alone isn't enough to prove two tokenizers assign ids the same way.
+
+## The reference architecture: `nanogpt`
+
+The configs in `jobs/configs/` are of the family's reference preset, **nanogpt**: the modified GPT of
+upstream karpathy/nanochat (which our nanochat fork inherited), as materialized by
+`llmllab/tools/make_config.py --arch nanogpt`. Relative to a plain GPT it has value embeddings (a
+token-indexed, gated embedding added to the attention values on alternating layers), `smear` on the
+input embedding (a cheap bigram-like mix of the previous token), `backout` (the mid-depth residual
+subtracted from the final one), per-layer resid/x0 lambda scalars, a squared-ReLU FFN, and sliding-
+window ("SSSL") attention. The other presets are `plain` (a standard pre-norm stack with a gated SiLU
+FFN) and its `_kvshare` / `_kvshare_win` variants (cross-layer KV sharing, plus sliding windows). The
+former preset names `gpt` and `llama*` are accepted as aliases; tinylab itself never sees a preset
+name, only the tree.
 
 ## No derivation rules, not just no depth dial
 

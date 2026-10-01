@@ -14,7 +14,7 @@ def base_dir(tmp_path, monkeypatch):
 # Same synthetic in-memory corpus pattern as test_smoke.py/test_resume.py: no network, seconds on CPU.
 import os
 
-TINY_GPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
+TINY_NANOGPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "nanogpt_tiny.json")
 TINY_SEQUENCE_LEN = 32
 _SENTENCES = [
     "The quick brown fox jumps over the lazy dog near the old stone bridge.",
@@ -50,7 +50,7 @@ def tiny_checkpoint(tiny_dataset):
     from tinylab.ops import Context
     from tinylab.ops.train import run as train_run
     cfg = {"name": "pre", "op": "train", "kind": "base", "dataset": tiny_dataset, "sequence_len": TINY_SEQUENCE_LEN,
-           "model_config": TINY_GPT_CONFIG, "device_batch_size": 2, "total_batch_size": 64, "world_size": 1,
+           "model_config": TINY_NANOGPT_CONFIG, "device_batch_size": 2, "total_batch_size": 64, "world_size": 1,
            "num_iterations": 2, "eval_every": 2, "eval_tokens": 64}
     train_run(cfg, Context(device_type="cpu"))
     return "pre"

@@ -43,7 +43,7 @@ def test_validate_tag_rejects_anything_outside_1_to_4_names(bad):
         validate_tag(bad)
 
 
-@pytest.mark.parametrize("good", ["d12", "gpt-d12-base", "kvcache/d13-chat", "a/b/c", "exp01/m1/base", "a" * 16])
+@pytest.mark.parametrize("good", ["d12", "nanogpt-d12-base", "kvcache/d13-chat", "a/b/c", "exp01/m1/base", "a" * 16])
 def test_validate_tag_accepts_1_to_4_names(good):
     assert validate_tag(good) == good
 
@@ -54,7 +54,7 @@ def test_validate_name_rejects_anything_not_a_single_short_name(bad):
         validate_name(bad)
 
 
-@pytest.mark.parametrize("good", ["a", "d12", "gpt-d12-base", "a_b", "a" * 16])
+@pytest.mark.parametrize("good", ["a", "d12", "nanogpt-d12-base", "a_b", "a" * 16])
 def test_validate_name_accepts_a_single_short_name(good):
     assert validate_name(good) == good
 
@@ -67,7 +67,7 @@ def test_validate_tag_and_validate_name_error_messages_use_the_given_label():
 
 
 def test_the_tag_is_the_path_under_one_checkpoints_dir(base_dir):
-    assert resolve_checkpoint_dir("gpt-d12-base") == os.path.join(base_dir, "checkpoints", "gpt-d12-base")
+    assert resolve_checkpoint_dir("nanogpt-d12-base") == os.path.join(base_dir, "checkpoints", "nanogpt-d12-base")
     assert resolve_checkpoint_dir("kvcache/d13-chat") == os.path.join(base_dir, "checkpoints", "kvcache", "d13-chat")
     assert not hasattr(checkpoints, "CHECKPOINT_DIRS")  # the base_/chatsft_ split is gone
 
@@ -79,7 +79,7 @@ def _save_tiny(tag, *, tokenizer_block=None, template="base"):
     from modelcore import ModelManager
     manager = ModelManager()
     here = os.path.dirname(__file__)
-    with open(os.path.join(here, "fixtures", "gpt_tiny.json")) as f:
+    with open(os.path.join(here, "fixtures", "nanogpt_tiny.json")) as f:
         import json
         config = manager.config_from_dict(json.load(f))
     config = dataclasses.replace(config, template=template, tokenizer=tokenizer_block)
@@ -92,8 +92,8 @@ def _save_tiny(tag, *, tokenizer_block=None, template="base"):
 def test_nested_and_flat_tags_coexist_and_load_independently(base_dir):
     _save_tiny("kvcache/d13-chat")
     _save_tiny("kvcache")           # a tag that is also the folder of another
-    _save_tiny("gpt-d12-base")
-    for tag in ("kvcache/d13-chat", "kvcache", "gpt-d12-base"):
+    _save_tiny("nanogpt-d12-base")
+    for tag in ("kvcache/d13-chat", "kvcache", "nanogpt-d12-base"):
         _, _, meta = checkpoints.load_model(tag, torch.device("cpu"), phase="eval")
         assert meta["model_tag"] == tag
     assert checkpoints.find_last_step(resolve_checkpoint_dir("kvcache")) == 0  # the nested dir is not a checkpoint of it

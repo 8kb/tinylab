@@ -9,7 +9,7 @@ from modelcore import ModelManager
 
 from tinylab import modelconfig
 
-_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
+_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "nanogpt_tiny.json")
 
 
 def test_load_model_config_hydrates_a_valid_tree():

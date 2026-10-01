@@ -108,7 +108,7 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   few-shot examples concatenated) can run past 2,000 tokens; modelcore's rotary embedding cache is
   sized at `sequence_len * 10` when the model is built, and exceeding it is a hard error, not a
   truncation. `jobs/smoke.json` trains at `sequence_len: 2048` for exactly this reason, even
-  though the model itself is tiny (`configs/gpt_d4.json`, a 4-layer tree).
+  though the model itself is tiny (`configs/nanogpt_d4.json`, a 4-layer tree).
 - **`train`'s own forward/backward loop calls `torch.compile(model, dynamic=False)`** (fp8 first,
   then compile — ordering matters), using an uncompiled `orig_model` for the optimizer and every
   checkpoint save (a compiled module's `state_dict()` keys gain an `_orig_mod.` prefix otherwise).
@@ -142,11 +142,12 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   complete address under `<base_dir>/checkpoints/`. Consequence: a base and an sft checkpoint can no
   longer share a tag (our nanochat fork's `d12`-for-both convention), so an sft step with `output_tag ==
   source_tag` is refused. Don't reintroduce a per-kind directory to get that back — put the kind in
-  the tag (`gpt-d12-base` / `gpt-d12-chat`).
-- **A `kind: sft` (or `rl`) checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
+  the tag (`nanogpt-d12-base` / `nanogpt-d12-chat`).
+- **A `kind: sft` (or `rl`) checkpoint stamps `template: "chat_tools"`; a base one keeps its config's.**
   An `rl` checkpoint also writes `"kind": "rl"` into its meta, and its `step` counts completed
   optimizer updates.
-  Declarative only until modelcore validates templates against the tokenizer's special tokens.
+  Declarative: modelcore only checks the template is a known one (`base`/`chat_tools`; the old
+  spelling `nanochat` loads as an alias and is re-saved as `chat_tools`), and nothing reads it yet.
 - **A fresh `kind: sft` step warm-starts its optimizer from `source_tag`'s own checkpoint by
   default** (`"load_optimizer"`, default `true`) — momentum/`exp_avg` buffers only, LRs reset
   right after (`load_state_dict` overwrites a group's whole metadata), then scaled by

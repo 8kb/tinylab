@@ -192,7 +192,7 @@ def print_human(row):
     label = row["source"] if "trained" not in row else row["trained"]["tag"]
     print(f"\n{'=' * 80}\n{label}\n{'=' * 80}")
     print(f"  n_layer={shape['n_layer']} n_embd={shape['n_embd']} n_head={shape['n_head']} n_kv_head={shape['n_kv_head']} "
-          f"sequence_len={shape['sequence_len']} window_pattern={shape['window_pattern']!r} num_kv_slots={shape['num_kv_slots']}")
+          f"sequence_len={shape['sequence_len']} window={shape['window']!r} num_kv_slots={shape['num_kv_slots']}")
     print("  Params by role:")
     for key, value in params.items():
         print(f"    {key:16s}: {value:,}")

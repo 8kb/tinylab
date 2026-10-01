@@ -19,7 +19,7 @@ from tinylab.tokenizer import get_tokenizer
 
 pytestmark = pytest.mark.slow
 
-_TINY_GPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "gpt_tiny.json")
+_TINY_NANOGPT_CONFIG = os.path.join(os.path.dirname(__file__), "fixtures", "nanogpt_tiny.json")
 
 _SENTENCES = [
     "The quick brown fox jumps over the lazy dog near the old stone bridge.",
@@ -51,7 +51,7 @@ def _prepare_fake_dataset(base_dir, tokenizer, sequence_len):
 def _base_cfg(sequence_len):
     return {
         "name": "pre", "op": "train", "kind": "base", "dataset": "smoke", "sequence_len": sequence_len,
-        "model_config": _TINY_GPT_CONFIG,
+        "model_config": _TINY_NANOGPT_CONFIG,
         "device_batch_size": 2, "total_batch_size": 64, "world_size": 1,
         "eval_every": 3, "eval_tokens": 64, "save_every": 3,
     }

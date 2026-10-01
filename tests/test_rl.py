@@ -60,7 +60,7 @@ def test_two_steps_write_an_rl_checkpoint(base_dir, tiny_checkpoint):
     meta = _meta(base_dir, 2)
     assert meta["kind"] == "rl" and meta["step"] == 2
     assert meta["base_model_tag"] == tiny_checkpoint
-    assert meta["model_config"]["template"] == "nanochat"
+    assert meta["model_config"]["template"] == "chat_tools"
     assert os.path.exists(os.path.join(base_dir, "checkpoints", "rlout", "optim_000002_rank0.pt"))
 
 
