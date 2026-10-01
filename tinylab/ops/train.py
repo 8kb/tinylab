@@ -1,10 +1,10 @@
 """
 The `train` op: one loop for both kind="base" (pretrain from scratch) and kind="sft" (finetune a
-base checkpoint on conversation data). Ported from nanochat's scripts/base_train.py +
+base checkpoint on conversation data). Ported from our nanochat fork's scripts/base_train.py +
 scripts/chat_sft.py -- see docs/architecture.md for what's deliberately dropped relative to that,
 and docs/job-file.md for every cfg key this module reads.
 
-Carries no derivation rule of its own: every horizon/batch-size/LR-scale number nanochat's
+Carries no derivation rule of its own: every horizon/batch-size/LR-scale number our nanochat fork's
 scaling-law math (target_flops, target_param_data_ratio, the muP batch-size/weight-decay
 corrections) used to compute is now a required job-file key instead -- see AGENTS.md's "a config
 tree carries only concrete, already-decided values, never a derivation rule" invariant, which now
@@ -52,7 +52,7 @@ _COMMON_KEYS = {
     "push_model", "push_optim",
 }
 _BASE_KEYS = set()
-# init_lr_frac/load_optimizer are sft-only, deliberately: neither exists in nanochat's
+# init_lr_frac/load_optimizer are sft-only, deliberately: neither exists in our nanochat fork's
 # scripts/base_train.py either (they're chat_sft.py-only args), and accepted_keys is kind-aware,
 # so either key on a kind="base" step is a startup error instead of a silently-ignored one.
 _SFT_KEYS = {"source_tag", "source_step", "init_lr_frac", "load_optimizer"}
@@ -109,7 +109,7 @@ def _open_dataset(cfg, ctx, kind, sequence_len, tokenizer):
 def _lr_schedule(num_iterations, warmup_steps, warmdown_ratio, final_lr_frac, momentum_warmup_steps):
     """Builds the two per-step schedule functions a training loop needs, from
     modelcore.optim.schedules.lr_multiplier/muon_momentum (this module's own copies were ported
-    from nanochat's scripts/base_train.py, which now shares the same source).
+    from our nanochat fork's scripts/base_train.py, which now shares the same source).
 
     num_iterations: total training steps (an explicit cfg["num_iterations"] for kind="base", or
         the one-epoch derivation for kind="sft").
@@ -149,7 +149,7 @@ def run(cfg: dict, ctx) -> dict:
     is a continuation, not a re-interpretation), optimizer state, and dataloader position, and
     continues training from its saved step instead of the kind-specific fresh-start path below. A
     world_size mismatch against the checkpoint's own recorded value is a hard error (MuonAdamW's
-    optimizer state doesn't reshard across world_size -- see TODO.md), and so is a missing
+    optimizer state doesn't reshard across world_size), and so is a missing
     optimizer shard for this rank -- resume never silently falls back to a fresh optimizer. If
     ctx.resume is set but no checkpoint exists yet under this tag, this is just a normal fresh
     start (safe to pass --resume unconditionally in an unattended restart script)."""
@@ -255,7 +255,7 @@ def run(cfg: dict, ctx) -> dict:
             assert saved_world_size == ddp_world_size, (
                 f"train: resume found a checkpoint saved at world_size={saved_world_size}, but "
                 f"this run was launched with {ddp_world_size} -- MuonAdamW's optimizer state "
-                f"doesn't reshard across world_size (see TODO.md); relaunch at the original "
+                f"doesn't reshard across world_size; relaunch at the original "
                 f"world_size to resume."
             )
             assert optimizer_state is not None, (
@@ -308,7 +308,7 @@ def run(cfg: dict, ctx) -> dict:
             base_model_tag = meta.get("model_tag")
             base_model_step = meta.get("step")
 
-            # Optimizer momentum warm-start (default on, nanochat's chat_sft.py --load-optimizer):
+            # Optimizer momentum warm-start (default on, our nanochat fork's chat_sft.py --load-optimizer):
             # load source_tag's own optimizer shard for this rank -- kept as a separate
             # warm_start_optimizer_state local (see its declaration above), consumed after the
             # optimizer below is built, then LR-reset by the init_lr_frac block right after that.
@@ -319,7 +319,7 @@ def run(cfg: dict, ctx) -> dict:
                 # base produces no "matrix"/"embedding"/... groups at all, plus new "adapter"/
                 # "adapter_scalar" roles -- see modelcore.roles.build_param_groups). Loading the
                 # shard here would apply momentum state to the wrong parameters entirely, not
-                # just stale ones (nanochat's own comment at chat_sft.py's equivalent check).
+                # just stale ones (our nanochat fork's own comment at chat_sft.py's equivalent check).
                 assert "load_optimizer" not in cfg, (
                     f"train: sft step {cfg['name']!r} has adapters and an explicit "
                     f"\"load_optimizer\": true -- the pretrained optimizer's param-group layout "
@@ -333,7 +333,7 @@ def run(cfg: dict, ctx) -> dict:
                     f"train: sft step {cfg['name']!r} warm-start (\"load_optimizer\") found "
                     f"source_tag={cfg['source_tag']!r} saved at world_size={saved_world_size}, "
                     f"but this run was launched with {ddp_world_size} -- MuonAdamW's optimizer "
-                    f"state doesn't reshard across world_size (see TODO.md). Relaunch at the "
+                    f"state doesn't reshard across world_size. Relaunch at the "
                     f"original world_size, or set \"load_optimizer\": false to start sft with a "
                     f"fresh optimizer instead."
                 )
@@ -373,7 +373,7 @@ def run(cfg: dict, ctx) -> dict:
         print0(f"[{cfg['name']}] fp8: {fp8_report.num_converted}/{fp8_report.num_linear} Linear converted")
     fp8_eval = cfg.get("fp8_eval", True)
 
-    # Compile the model for the train/eval forward, matching nanochat's scripts/base_train.py
+    # Compile the model for the train/eval forward, matching our nanochat fork's scripts/base_train.py
     # exactly (fp8 first, then compile -- ordering matters, see that script's own comment).
     # orig_model (uncompiled) is what the optimizer and checkpoint save must use -- a compiled
     # module's state_dict keys gain an "_orig_mod." prefix (nanochat/nanochat/checkpoint_manager.py
@@ -399,12 +399,12 @@ def run(cfg: dict, ctx) -> dict:
     model = torch.compile(model, dynamic=False)
 
     optimizer_hparams_kwargs = dict(
-        # 0.008 for both kinds -- nanochat's chat_sft.py inherits this value from the pretrain
+        # 0.008 for both kinds -- our nanochat fork's chat_sft.py inherits this value from the pretrain
         # checkpoint's own user_config (base_train.py's own default), it doesn't have a separate
         # sft literal of its own. tinylab has no "inherit a hyperparameter from a checkpoint"
         # mechanism (a job file names every value it wants -- see this module's own docstring), so
         # the fix is to this literal matching what nanochat actually trains at, not to add
-        # inheritance. Was 0.004 (half nanochat's effective sft value) until experiment 01
+        # inheritance. Was 0.004 (half our nanochat fork's effective sft value) until experiment 01
         # (ffn-width-vs-heads) surfaced this while diagnosing the sft init_lr_frac/optimizer-
         # warm-start gap below -- see that experiment's README "Incidents and lessons".
         unembedding_lr=cfg.get("unembedding_lr", 0.008),
@@ -435,12 +435,12 @@ def run(cfg: dict, ctx) -> dict:
             # overwrites every group's own "lr"/"initial_lr" with the SOURCE run's own saved
             # (warmed-down) values -- capture this run's freshly-computed LRs first and restore
             # them right after, so only the momentum/exp_avg buffers actually carry over. Matches
-            # nanochat's chat_sft.py:216-226 exactly, including its own ordering and comment.
+            # our nanochat fork's chat_sft.py:216-226 exactly, including its own ordering and comment.
             base_lrs = [g["lr"] for g in optimizer.param_groups]
             optimizer.load_state_dict(warm_start_optimizer_state)
             for g, base_lr in zip(optimizer.param_groups, base_lrs):
                 g["lr"] = base_lr
-        # init_lr_frac (sft only -- nanochat's chat_sft.py --init-lr-frac, default 0.8): scales
+        # init_lr_frac (sft only -- our nanochat fork's chat_sft.py --init-lr-frac, default 0.8): scales
         # the starting sft LR down from the (possibly just-warm-started-then-reset) base LR
         # above. Only on a genuine fresh start, in this "else" -- never on a resumed step, which
         # must reproduce exactly what the interrupted run had (the branch above). A no-op

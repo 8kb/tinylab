@@ -12,7 +12,7 @@
       "_note": "a production-scale slice of ClimbMix; 'pre' below decides how many of these tokens it actually trains on" },
     { "name": "pre", "op": "train", "kind": "base", "total_batch_size": 1048576, "num_iterations": 4980,
       "device_batch_size": 32, "eval_every": 250, "eval_tokens": 41943040,
-      "_note": "eval_tokens = 80 * 524288, the default nanochat's base_train.py used" },
+      "_note": "eval_tokens = 80 * 524288, the default our nanochat fork's base_train.py used" },
     { "name": "sftdata", "op": "prepare", "kind": "sft" },
     { "name": "sft", "op": "train", "kind": "sft", "source_tag": "pre", "device_batch_size": 32,
       "total_batch_size": 524288, "eval_every": 200, "eval_tokens": 2097152 },

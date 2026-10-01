@@ -1,6 +1,6 @@
 """
 The `rl` op: reinforcement learning on GSM8K, starting from an sft checkpoint. Ported from
-nanochat's scripts/chat_rl.py (see llmllab/docs/history.md). The algorithm is deliberately plainer
+our nanochat fork's scripts/chat_rl.py (see llmllab/docs/history.md). The algorithm is deliberately plainer
 than "GRPO", closer to REINFORCE:
 
 1) no trust region -- no KL regularization to a reference model;

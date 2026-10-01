@@ -14,9 +14,12 @@ anywhere.)
 
 All code, comments, docs, commit messages, and any other text committed to git MUST be in English.
 
+Lineage: this family descends from karpathy/nanochat via our fork `8kb/nanochat` (archived).
+Principles (KISS/DRY/YAGNI/SOLID) and the provenance rule: [llmllab/AGENTS.md](../llmllab/AGENTS.md#style).
+
 `modelcore`/`datacore`/`benchcore` are pinned by git tag in `pyproject.toml`'s
-`[tool.uv.sources]`: `modelcore` `v0.12.0` (`modelcore.v3` configs: one `Block` = mixer + features; `short_conv`/`mamba2`/`mamba3` mixers, `canon`/`output_gate` features), `datacore` `v0.3.0`, `benchcore`
-`v0.2.1`.
+`[tool.uv.sources]`: `modelcore` `v0.13.0` (`modelcore.v3` configs: one `Block` = mixer + features; `short_conv`/`mamba2`/`mamba3` mixers, `canon`/`output_gate` features), `datacore` `v0.5.0`, `benchcore`
+`v0.5.0`.
 
 **Old checkpoints.** A pre-v3 checkpoint (e.g. experiment 01's `local-artifacts/checkpoints`) must go
 through `python -m modelcore.convert SRC DST` before `chat`/`bench` (optimizer state is not
@@ -50,12 +53,12 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
 
 ## Invariants that will bite you (tinylab's own)
 
-- **`nanochat` is archived and cannot be imported.** tinylab's code was **ported** from it — each
+- **our nanochat fork is archived and cannot be imported.** tinylab's code was **ported** from it — each
   ported file's docstring names its origin; the history is in `llmllab/docs/history.md`.
   `tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping
   in (a stale checkout on `PYTHONPATH` would silently work).
 - **tinylab keeps its own cache directory**, `~/.cache/tinylab/` (`TINYLAB_BASE_DIR` to override) —
-  not nanochat's old `~/.cache/nanochat/`, even though the ported tokenizer produces identical
+  not our nanochat fork's old `~/.cache/nanochat/`, even though the ported tokenizer produces identical
   token ids. Nothing in there is read from the old cache.
 - **An unrecognized job-file key is a hard error, with a close-match suggestion when there is
   one.** `prepare`/`train`/`bench` each accept a different key set depending on their step's own `"kind"`/`"suite"` (see
@@ -72,10 +75,11 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   finished saving, not a directory-scan guess (see `docs/architecture.md`'s "Resume: the job state
   file"). The state file's own write is crash-safe (temp file + fsync, then a 2-generation
   atomic-rename rotation) for the same reason: a mechanism meant to survive a crash can't itself be
-  the thing that gets corrupted by one. No pruning of periodic checkpoints (`"save_every"`) is
-  attempted — nothing in the family prunes old checkpoints, and a "keep last N" policy is exactly
-  the kind of tuned heuristic this repo avoids; a large model at a small `save_every` grows disk
-  usage without bound, by design, not oversight.
+  the thing that gets corrupted by one. Local periodic checkpoints (`"save_every"`) are
+  never pruned — a "keep last N" policy is exactly the kind of tuned heuristic this repo avoids, so a
+  large model at a small `save_every` grows local disk usage without bound, by design. Only the
+  *bucket* has retention: `push_model`/`push_optim` (`"last"` by default) decide which steps are
+  uploaded, see `docs/remote.md`.
 - **`modelcore.store.FileSystemStore`'s own checkpoint writes are still not atomic** — a separate
   repo, its own versioning discipline, out of scope for a tinylab-only change. The job state file
   above fixes *which checkpoint step resume trusts*, not the individual checkpoint file's own
@@ -135,7 +139,7 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
 - **Checkpoint tags are arbitrary text with `/` folders, and share one namespace.** There is no
   `source` key and no `base_`/`chatsft_` directory: `output_tag`/`source_tag`/`model_tag` are each a
   complete address under `<base_dir>/checkpoints/`. Consequence: a base and an sft checkpoint can no
-  longer share a tag (nanochat's `d12`-for-both convention), so an sft step with `output_tag ==
+  longer share a tag (our nanochat fork's `d12`-for-both convention), so an sft step with `output_tag ==
   source_tag` is refused. Don't reintroduce a per-kind directory to get that back — put the kind in
   the tag (`gpt-d12-base` / `gpt-d12-chat`).
 - **A `kind: sft` (or `rl`) checkpoint stamps `template: "nanochat"`; a base one keeps its config's.**
@@ -145,7 +149,7 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
 - **A fresh `kind: sft` step warm-starts its optimizer from `source_tag`'s own checkpoint by
   default** (`"load_optimizer"`, default `true`) — momentum/`exp_avg` buffers only, LRs reset
   right after (`load_state_dict` overwrites a group's whole metadata), then scaled by
-  `"init_lr_frac"` (default `0.8`). Ported from nanochat's `chat_sft.py --load-optimizer`/
+  `"init_lr_frac"` (default `0.8`). Ported from our nanochat fork's `chat_sft.py --load-optimizer`/
   `--init-lr-frac`; see docs/architecture.md's "sft's optimizer" for the full mechanics and why
   it's two separate locals (`warm_start_optimizer_state` vs. the resume path's own
   `optimizer_state`) rather than one. An adapter-augmented `kind: sft` step (via `"model_config"`
@@ -161,7 +165,7 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
   depends on it); a mismatched `torchrun --nproc_per_node` is a hard error, not a silently
   different effective batch size. On `--resume`, the *checkpoint's own* recorded `world_size` is
   checked too, against the current launch — `MuonAdamW`'s optimizer state doesn't reshard across a
-  different `world_size` (see `TODO.md`; a real crash in nanochat's own Stage 12), so a mismatch
+  different `world_size` (a real crash in our nanochat fork's Stage 12, see `llmllab/docs/history.md`), so a mismatch
   here is refused up front rather than crashing deep inside the optimizer, or silently starting
   with fresh momentum. Edit the job file (or relaunch at the original `world_size`) when the GPU
   configuration changes.
@@ -182,8 +186,8 @@ converted). Recurrent state (SSM/conv caches) is transparent to `Engine` and ben
 ## Testing
 
 ```bash
-uv run pytest -q                 # everything: a couple of seconds, incl. one real training run
-uv run pytest -q -m "not slow"   # skip that one real run: well under a second
+uv run pytest -q                 # everything: ~40 seconds (a cold torch.compile cache adds ~30 on the first run)
+uv run pytest -q -m "not slow"   # skip the real (tiny) training runs: ~3 seconds
 ```
 
 `tests/conftest.py` has the one shared `base_dir` fixture (isolates `TINYLAB_BASE_DIR` to a

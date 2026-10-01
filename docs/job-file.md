@@ -93,7 +93,7 @@ included) lives in `modelcore.scaling`. Compute `total_batch_size`/`num_iteratio
 | `muon_momentum_warmup_steps` | Steps Muon's own momentum ramps over before holding at 0.97. | `400` (`modelcore.optim.schedules.muon_momentum`'s own default) | both |
 | `eval_every` | Run a val-bpb pass every N steps (plus always at the final step). `0` disables eval entirely, including at the final step. | `50` | both |
 | `eval_tokens` | Tokens to evaluate per val pass. | required | both |
-| `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `-1` disables periodic saving (today's behavior: final step only). No pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows disk usage without bound. | `-1` | both |
+| `save_every` | Save a checkpoint every N steps, in addition to the always-saved final step. `-1` disables periodic saving (today's behavior: final step only). No local pruning — each save is a new, permanent `model_<step>.pt`/`meta_<step>.json`/`optim_<step>_rank<r>.pt` triple; a large model at a small `save_every` grows local disk usage without bound (the bucket has its own retention: `push_model`/`push_optim`). | `-1` | both |
 | `fp8` | Enable FP8 training (`modelcore.ModelManager.enable_fp8`, always its own "tensorwise" recipe -- the only one implemented; needs an H100+ GPU). | `false` | both |
 | `fp8_eval` | When `fp8` is on, measure val bpb directly in fp8 (`true`) instead of converting back to bf16 first (`false`). Irrelevant without `fp8`. | `true` | both |
 | `doc_masking` | Restrict attention to within each packed row's own document (BOS-delimited), instead of allowing attention across document boundaries within a row. | `false` | both |
@@ -106,7 +106,7 @@ included) lives in `modelcore.scaling`. Compute `total_batch_size`/`num_iteratio
 | `push_optim` | Same policy values, for `optim_<step>_rank<r>.pt`. Keep it at least as generous as you want `--resume` and sft `load_optimizer` to be able to start from the bucket. | `"last"` | both |
 | `source_tag` | Checkpoint tag to fine-tune from — normally an earlier `kind: base` step's `output_tag`. | required | sft |
 | `source_step` | A specific step of that checkpoint, instead of its latest. | latest | sft |
-| `init_lr_frac` | Starting sft LR as a fraction of the (possibly warm-started) base LR — nanochat's `chat_sft.py --init-lr-frac`. | `0.8` | sft |
+| `init_lr_frac` | Starting sft LR as a fraction of the (possibly warm-started) base LR — our nanochat fork's `chat_sft.py --init-lr-frac`. | `0.8` | sft |
 | `load_optimizer` | Warm-start the optimizer from `source_tag`'s own checkpoint (Muon/Adam momentum buffers only — LRs are reset to this step's own, then scaled by `init_lr_frac`). Forced off (and an explicit `true` is an error) when the step's model carries `adapters` — the pretrained optimizer's param-group layout doesn't match an adapter-augmented model. | `true` | sft |
 
 ## `tokenizer`
@@ -116,7 +116,7 @@ Trains a fresh BPE vocab and writes it to the tokenizer named by its `output` ke
 files never need this: tinylab ships a committed default vocab. If used, put it before any step that
 loads *that same* tokenizer (each is loaded once and cached on first use; a step that already loaded
 it makes this one raise). Training `"b"` after something loaded `"a"` is fine. No required keys; every
-default below matches nanochat's own `scripts/tok_train.py`.
+default below matches our nanochat fork's own `scripts/tok_train.py`.
 
 | Key | Meaning | Default |
 |---|---|---|

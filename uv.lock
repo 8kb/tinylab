@@ -36,8 +36,8 @@ wheels = [
 
 [[package]]
 name = "benchcore"
-version = "0.4.0"
-source = { git = "https://github.com/8kb/benchcore?tag=v0.4.0#219a4c01930126bc98b868a48d333963a62d87f3" }
+version = "0.5.0"
+source = { git = "https://github.com/8kb/benchcore?tag=v0.5.0#be7cb2f0e4a977276ba807dcfe2b0f79357b1c97" }
 dependencies = [
     { name = "datacore", extra = ["parquet"] },
     { name = "filelock" },
@@ -244,8 +244,8 @@ wheels = [
 
 [[package]]
 name = "datacore"
-version = "0.4.0"
-source = { git = "https://github.com/8kb/datacore?tag=v0.4.0#8515850f6a57ad7d55c55cef72f8b663770dc959" }
+version = "0.5.0"
+source = { git = "https://github.com/8kb/datacore?tag=v0.5.0#dcc81ba50cffb0693648ab3227403f1462f50bad" }
 dependencies = [
     { name = "filelock" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
@@ -539,8 +539,8 @@ wheels = [
 
 [[package]]
 name = "modelcore"
-version = "0.12.0"
-source = { git = "https://github.com/8kb/modelcore?tag=v0.12.0#fb9e394dd19ed7067e5789eca4761dfda8939358" }
+version = "0.13.0"
+source = { git = "https://github.com/8kb/modelcore?tag=v0.13.0#40eab11547152a0071f5bbc605725243738d48ae" }
 dependencies = [
     { name = "torch", version = "2.9.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-tinylab-cpu') or (extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-tinylab-cpu' and extra == 'extra-7-tinylab-gpu') or (extra != 'extra-7-tinylab-cpu' and extra != 'extra-7-tinylab-gpu')" },
@@ -1461,10 +1461,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.4.0" },
-    { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.4.0" },
+    { name = "benchcore", extras = ["bundle"], git = "https://github.com/8kb/benchcore?tag=v0.5.0" },
+    { name = "datacore", extras = ["torch", "parquet"], git = "https://github.com/8kb/datacore?tag=v0.5.0" },
     { name = "huggingface-hub", specifier = ">=1.31" },
-    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.12.0" },
+    { name = "modelcore", extras = ["fa3"], git = "https://github.com/8kb/modelcore?tag=v0.13.0" },
     { name = "rustbpe", specifier = ">=0.1.0" },
     { name = "setuptools", marker = "extra == 'cpu'", specifier = ">=65.0.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },

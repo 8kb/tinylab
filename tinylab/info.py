@@ -1,7 +1,7 @@
 """
 `python -m tinylab info`: a read-only inspector. Reports parameters, FLOPs and KV-cache bytes for a
 config file or a trained checkpoint tag, plus the training plan a given compute target implies --
-without a GPU, without data, without loading weights. Ported from the stats half of nanochat's
+without a GPU, without data, without loading weights. Ported from the stats half of our nanochat fork's
 scripts/model_info.py (see llmllab/docs/history.md); the depth dial itself lives in
 llmllab/tools/make_config.py.
 
@@ -76,11 +76,32 @@ def _load_config(source):
     return ModelConfig.from_dict(meta["model_config"]), meta, step
 
 
+def mixer_types(config) -> list:
+    """The distinct token-mixer types of a config's blocks, in order of first appearance
+    (["attention"], or ["short_conv", "attention"] for a hybrid) -- what the tree really contains,
+    unlike `reference.preset`, which only names the preset a hybrid was started from."""
+    found = []
+
+    def walk(spec):
+        if spec.type == "block":
+            mixer = spec.params["mixer"].type
+            if mixer not in found:
+                found.append(mixer)
+        for value in spec.params.values():
+            for child in (value if isinstance(value, list) else [value]):
+                if hasattr(child, "type") and hasattr(child, "params"):
+                    walk(child)
+
+    walk(config.body)
+    return found
+
+
 def stats_block(manager, config, kv_batch_size=1) -> dict:
     stats = manager.stats(config)
     reference = config.reference or {}
     return {
-        "arch": reference.get("preset"),
+        "mixers": mixer_types(config),
+        "preset": reference.get("preset"),
         "depth": stats.n_layer,
         "shape": {**stats.shape_summary, "num_kv_slots": stats.kv_cache_spec["num_kv_slots"]},
         "params": {**stats.params_by_role, "total": stats.num_params, "matmul": stats.num_matmul_params,

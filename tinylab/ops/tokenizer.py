@@ -1,7 +1,7 @@
 """
 The `tokenizer` op: trains a fresh BPE vocab and writes it to the tokenizer the step names (its
 "output" key, else the run's "tokenizer", else the default -- see tinylab.tokenizer.
-resolve_tokenizer_dir), overwriting whatever was there. Ported from nanochat's
+resolve_tokenizer_dir), overwriting whatever was there. Ported from our nanochat fork's
 scripts/tok_train.py -- see tinylab.tokenizer for the training mechanism itself (rustbpe +
 tiktoken), this module only owns the corpus (ClimbMix, same shards "prepare" kind="base" downloads)
 and job-file key handling.
@@ -29,7 +29,7 @@ def accepted_keys(cfg: dict) -> set:
 
 def _text_iterator(train_paths, doc_cap, max_chars):
     """Flattens datacore.ParquetDirectorySource's (path, texts) yield into a doc-cap-truncated,
-    max-chars-bounded stream of raw document strings -- the same shape nanochat's own
+    max-chars-bounded stream of raw document strings -- the same shape our nanochat fork's own
     parquets_iter_batched-based text_iterator produces, reusing datacore's already-present parquet
     reader instead of a second pyarrow call site."""
     from datacore import ParquetDirectorySource
@@ -88,8 +88,7 @@ def run(cfg: dict, ctx) -> dict:
     print0(f"Trained tokenizer in {train_time:.1f}s")
 
     # Compression stat: chars/token over a bounded sample of the same corpus, encoded with the
-    # tokenizer just trained -- tinylab's own version of nanochat's tok_eval.py compression-ratio
-    # check, minus its GPT-2/GPT-4 reference-tokenizer comparison. A separate, smaller cap than the
+    # tokenizer just trained. (Comparing against reference tokenizers is `bench` suite="tokenizer".) A separate, smaller cap than the
     # training run's own max_chars -- this only measures, it doesn't need the whole corpus.
     sample_cap = min(max_chars, 5_000_000)
     sample_docs = list(_text_iterator(train_paths, doc_cap, sample_cap))

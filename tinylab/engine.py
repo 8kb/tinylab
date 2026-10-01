@@ -1,12 +1,12 @@
 """
 Inference engine: KV-cached generation plus the calculator tool-use state machine. Ported from
-nanochat's nanochat/engine.py, dropping only its __main__ equivalence-testing harness. Everything
+our nanochat fork's nanochat/engine.py, dropping only its __main__ equivalence-testing harness. Everything
 works over token id sequences -- the Engine knows nothing about tokenization beyond the handful of
 special tokens it needs for tool use.
 
 The tool-use decode loop itself (RowState, the forced-token deque, terminal-token detection, the
 tool start/end state machine) now lives in modelcore.generate.generate_with_tools/collect_batch --
-nanochat's engine.py carried an identical copy of this whole file. What stays here is everything
+our nanochat fork's engine.py carried an identical copy of this whole file. What stays here is everything
 actually specific to this tool and this chat format: use_calculator (the eval() sandbox), and
 resolving this repo's own special-token names to ids for the ToolSpec/terminal_ids
 generate_with_tools takes.

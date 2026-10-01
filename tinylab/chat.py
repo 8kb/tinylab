@@ -4,7 +4,7 @@ block rather than its own flags (the same file that trained the model already na
 and checkpoint tag). Deliberately a separate command, not a job op -- see AGENTS.md. See
 docs/job-file.md's "chat" table for every key this module reads.
 
-Conversation rendering follows nanochat's scripts/chat_cli.py convention, driving the same
+Conversation rendering follows our nanochat fork's scripts/chat_cli.py convention, driving the same
 tinylab.engine.Engine the `bench` op hands to benchcore as its Generator, so the interactive path
 and the scored path exercise identical decoding code.
 """

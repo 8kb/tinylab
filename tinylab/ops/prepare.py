@@ -1,5 +1,5 @@
 """
-The `prepare` op: tokenize + pack a corpus into a datacore dataset. Ported from nanochat's
+The `prepare` op: tokenize + pack a corpus into a datacore dataset. Ported from our nanochat fork's
 scripts/data_prep.py -- kind="base" downloads ClimbMix shards (if not already present) and packs
 them with BestFitCropPacker; kind="sft" builds the SmolTalk + MMLU + GSM8K conversation mixture and
 packs it with BestFitPadPacker. See docs/job-file.md for every cfg key this module reads.

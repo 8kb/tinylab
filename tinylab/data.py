@@ -1,7 +1,7 @@
 """
 Corpus identity: which URL, which shard count, which HF dataset -- the parts datacore/benchcore
-deliberately don't know ("a corpus's URL" is a host concept). Ported and merged from nanochat's
-nanochat/dataset.py + nanochat/sft_data.py.
+deliberately don't know ("a corpus's URL" is a host concept). Ported and merged from our nanochat fork's
+dataset.py + sft_data.py.
 """
 import os
 
@@ -11,8 +11,7 @@ from datacore.download import download_shards
 from tinylab.runtime import get_base_dir
 
 # -----------------------------------------------------------------------------
-# ClimbMix: the pretraining corpus. Same source nanochat uses, so a shard downloaded once could in
-# principle be reused -- but tinylab keeps its own base dir (see AGENTS.md), so it re-downloads.
+# ClimbMix: the pretraining corpus (karpathy's climbmix-400b-shuffle, the upstream nanochat corpus).
 
 BASE_URL = "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
 MAX_SHARD = 6542  # the last data shard is shard_06542.parquet

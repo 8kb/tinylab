@@ -1,8 +1,8 @@
 """
 Runtime plumbing: base dir, device/DDP init, minimal logging. Device/DDP/seed bring-up
 (is_ddp_requested/is_ddp_initialized/get_dist_info/autodetect_device_type/compute_init/
-compute_cleanup) now lives in modelcore.runtime -- this file's own copy was ported from nanochat's
-nanochat/common.py, and nanochat's copy has since moved to the same place, since modelcore has no
+compute_cleanup) now lives in modelcore.runtime -- this file's own copy was ported from our nanochat fork's
+nanochat/common.py, and our nanochat fork's copy has since moved to the same place, since modelcore has no
 host dependencies at all. Re-exported here so every existing `from tinylab.runtime import ...` call
 site keeps working unchanged.
 """
@@ -26,7 +26,7 @@ COMPUTE_DTYPE_REASON = DEFAULT_RUNTIME.compute_dtype_reason
 def get_base_dir():
     """Not a module-level constant -- computed on every call so TINYLAB_BASE_DIR can be set (e.g.
     by a test) without needing to import this module in a particular order. tinylab keeps its own
-    cache directory, separate from nanochat's ~/.cache/nanochat/, even though the ported tokenizer
+    cache directory, separate from our nanochat fork's ~/.cache/nanochat/, even though the ported tokenizer
     produces identical token ids -- see AGENTS.md."""
     if os.environ.get("TINYLAB_BASE_DIR"):
         base_dir = os.environ["TINYLAB_BASE_DIR"]

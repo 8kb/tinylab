@@ -32,7 +32,7 @@ tinylab/
 jobs/
   smoke.json              tiny end-to-end pipeline, runs on a laptop in minutes
   speedrun.json            real-scale template for a multi-GPU pod
-  contest.json             two-architecture comparison (nanochat's former runs/contest_d12.sh rows)
+  contest.json             two-architecture comparison (the rows of our nanochat fork's runs/contest_d12.sh)
   configs/                 materialized ModelConfig trees the job files above point at, generated
                           by llmllab/tools/make_config.py (see AGENTS.md)
 ```
@@ -51,7 +51,7 @@ __main__.main()
 `resolve_steps` deep-merges `job["defaults"]` into every step, then validates the merged result
 against that op's own `accepted_keys(cfg)` — a *function*, not a static set, because `prepare` and
 `train` accept a different key set depending on the step's own `"kind"` (`"base"` vs `"sft"`), and
-`bench` depending on `"suite"` (`"core"` vs `"chat"`). A key that's real for the wrong kind (e.g.
+`bench` depending on `"suite"` (`core`, `chat`, `bpb`, `sample`, `infer`, `tokenizer`). A key that's real for the wrong kind (e.g.
 `"mmlu_epochs"` on a `kind: base` prepare step) is caught the same way a genuinely unknown key is —
 see `docs/job-file.md` for the full key reference this validates against.
 
@@ -95,7 +95,7 @@ never collide):
   the step had already taken at least one periodic checkpoint (`"save_every"`, see
   `docs/job-file.md`) — without one, the step just restarts, which is the best any resume can do. A
   `world_size` mismatch against the checkpoint's own recorded value is a hard error (`MuonAdamW`'s
-  optimizer state doesn't reshard across `world_size` — see `TODO.md`), and so is a missing
+  optimizer state doesn't reshard across `world_size`), and so is a missing
   optimizer shard for this rank; resume never silently falls back to a fresh optimizer.
 
 ### The state file's own crash-safety
@@ -165,7 +165,7 @@ the job state file — see "Resume: the job state file" above.
 ## On-disk layout
 
 Everything lives under `<base_dir>` (`~/.cache/tinylab/`, or `TINYLAB_BASE_DIR` to override) —
-separate from `nanochat`'s `~/.cache/nanochat/`, even though the two produce identical token ids
+separate from our nanochat fork's `~/.cache/nanochat/`, even though the two produce identical token ids
 with a compatible tokenizer.
 
 ```
@@ -177,7 +177,7 @@ with a compatible tokenizer.
   prepared/<dataset_name>/   a datacore dataset: packed sequences + manifest
   checkpoints/<tag>/         model_<step>.pt, meta_<step>.json (its own "model_config" key holds
                              the tree -- there is no separate config_<step>.json file),
-                             optim_<step>_rank<r>.pt; multiple steps coexist with no pruning.
+                             optim_<step>_rank<r>.pt; multiple steps coexist, none pruned locally.
                              <tag> is 1-4 "/"-joined names, each 1-16 chars from [A-Za-z0-9_-]
                              ("gpt-d12-base", "kvcache/d13-chat")
   job_state/                 one state file (+.old/.tmp) per in-progress or crashed job run -- see "Resume" above
@@ -203,13 +203,13 @@ backslash, an empty/`.`/`..` segment). `job.resolve_steps` runs the same check u
 is a `JobError` before a `prepare` step has spent an hour, not a `ValueError` after.
 
 One consequence to know: base and sft used to be able to share a tag because they lived in different
-directories (nanochat's convention reuses `d12` for both). They can't now, so an sft step whose
+directories (our nanochat fork's convention reuses `d12` for both). They can't now, so an sft step whose
 `output_tag` equals its own `source_tag` is refused outright, rather than reading its starting weights
 from, and writing its result into, the same directory.
 
 ### sft's optimizer: `init_lr_frac` and `load_optimizer` (momentum warm-start)
 
-Ported from `nanochat/scripts/chat_sft.py`'s `--init-lr-frac`/`--load-optimizer`, both **sft-only**
+Ported from our nanochat fork's `chat_sft.py` (`--init-lr-frac`/`--load-optimizer`), both **sft-only**
 job-file keys (`_SFT_KEYS`, not accepted on `kind: base`). A fresh `kind: sft` step:
 
 1. Builds a normal, cold optimizer from this step's own `OptimizerHparams` (same as `base`).
@@ -234,11 +234,11 @@ LR on every resume. This is why the code carries the source-tag warm-start and t
 restore as two separate locals (`warm_start_optimizer_state` vs `optimizer_state`) even though both
 eventually reach the same `optimizer.load_state_dict` call site.
 
-What's deliberately **not** ported: nanochat's hyperparameter *inheritance* (`chat_sft.py` reads
+What's deliberately **not** ported: our nanochat fork's hyperparameter *inheritance* (`chat_sft.py` reads
 `embedding_lr`/`unembedding_lr`/`matrix_lr` back out of the pretrain checkpoint's own
 `user_config` when the CLI doesn't override them). tinylab has no "inherit a value from a
 checkpoint" mechanism anywhere else (a job file names every value it wants — see this module's own
-docstring), so `unembedding_lr`'s sft default is a literal `0.008`, matching what nanochat's
+docstring), so `unembedding_lr`'s sft default is a literal `0.008`, matching what our nanochat fork's
 inheritance actually resolves to for a checkpoint pretrained with `base_train.py`'s own default,
 not a new inheritance rule.
 
@@ -314,21 +314,22 @@ are concrete values, not rules, and stay.
 
 ## What tinylab deliberately doesn't do
 
-tinylab is the minimal host: one job file, six things it can do. Relative to `nanochat` (the
+tinylab is the minimal host: one job file, five ops (`prepare`, `train`, `bench`, `tokenizer`, `rl`)
+plus the `chat`, `info` and `remote` commands. Relative to our nanochat fork (the
 archived architecture-playground host that preceded it), tinylab has fp8, doc-masking,
 LoRA/DoRA adapters (ported in — see `ops/train.py`'s `fp8`/`doc_masking`/`model_config`
 adapter-override keys), periodic checkpointing and resume (`"save_every"`, `--resume` — see
 "Resume: the job state file" above), tokenizer training (the `tokenizer` op), and `torch.compile`
 in its own training loop (see "Why the training loop is compiled" below), but still no wandb
 logging, no fp16 `GradScaler`, and no mid-training CORE/sample eval (only periodic val-bpb). None of
-these are bugs — they were left behind in the archived nanochat; adding one back means porting it
+these are bugs — they were left behind in our archived nanochat fork; adding one back means porting it
 the same way everything else here was ported, not inventing it fresh. What was ported late, when
-nanochat was retired: the `rl` op, the `bpb`/`sample`/`infer`/`tokenizer` bench suites, and the
+our nanochat fork was retired: the `rl` op, the `bpb`/`sample`/`infer`/`tokenizer` bench suites, and the
 `info` inspector (see `llmllab/docs/history.md`).
 
 ## What one job file still can't replace: `runs/contest_d12.sh`
 
-`jobs/contest.json` runs a two-architecture comparison (matching the archived nanochat's
+`jobs/contest.json` runs a two-architecture comparison (matching our archived nanochat fork's
 `runs/contest_d12.sh` rows) as one tinylab pipeline — every architecture `make_config.py` can
 generate (or anyone can write by hand) is reachable, which presets never allowed. It is not a drop-in replacement for the shell driver,
 though:
@@ -349,11 +350,11 @@ own interrupted training loop, not just whole-step granularity.
 ## Why the training loop is compiled
 
 `tinylab.ops.train`'s forward/backward loop calls `torch.compile(model, dynamic=False)` right
-after fp8 conversion (ordering matters -- fp8 must wrap the model's Linears first, matching
-`nanochat/scripts/base_train.py`'s own comment on this exact ordering), using an `orig_model`
+after fp8 conversion (ordering matters -- fp8 must wrap the model's Linears first, as in our nanochat fork's
+`base_train.py`), using an `orig_model`
 reference (uncompiled) for the optimizer and every checkpoint save -- a compiled module's
-`state_dict()` keys gain an `_orig_mod.` prefix otherwise (`nanochat/nanochat/checkpoint_manager.py`
-has the same strip-hack for exactly this reason). `modelcore.optim.MuonAdamW.step` is additionally,
+`state_dict()` keys gain an `_orig_mod.` prefix otherwise (our nanochat fork's checkpoint manager had the same
+strip-hack). `modelcore.optim.MuonAdamW.step` is additionally,
 unconditionally compiled internally regardless -- that's an invariant owned by modelcore, not
 something tinylab's own loop controls or can opt out of.
 
@@ -373,42 +374,30 @@ tests.
 
 ## Where things come from
 
-`tokenizer.py`, `checkpoints.py`, `engine.py`, `chat.py`, `data.py`, `runtime.py`, and
-`info.py` and `ops/{prepare,train,bench,tokenizer,rl}.py` are each ported from a corresponding file in
-[`nanochat`](https://github.com/8kb/nanochat) (see each module's own docstring for exactly which
-one) and trimmed to what a job-file-driven pipeline needs — `nanochat` (now archived) was a virtual
-uv project (no `[build-system]`) and could never be a real dependency, so this is a port, not an import.
-`tests/test_no_nanochat.py` mechanically guards against an accidental `import nanochat` slipping in.
-`tokenizer.py`'s `train_from_iterator`/`save` (via `ops/tokenizer.py`) are the one place this repo
-now depends on `rustbpe` directly, same as nanochat's own `scripts/tok_train.py` does.
+Most modules are ported from the corresponding file of our nanochat fork (archived, see
+`llmllab/docs/history.md`; each module's docstring has the one-line provenance) and trimmed to what a
+job-file-driven pipeline needs. The fork was a virtual uv project and could never be a dependency, so
+this is a port, not an import; `tests/test_no_nanochat.py` mechanically guards against an accidental
+`import nanochat` slipping in. `tokenizer.py`'s `train_from_iterator`/`save` (via
+`ops/tokenizer.py`) are the one place this repo depends on `rustbpe` directly.
 
-Several pieces that started as ports (byte-identical copies of nanochat code, since neither host
-could depend on the other) have since moved into the subsystems all three repos already share,
-once the duplication became visible with both ports in hand — modelcore has no host dependencies
-at all, so this isn't a new coupling, just recognizing mechanism that belonged there from the
-start:
+What the three subsystems own instead of tinylab:
 
-- `runtime.py`'s device/DDP/seed bring-up (`compute_init`/`compute_cleanup`/
-  `autodetect_device_type`) → `modelcore.runtime`.
-- `ops/train.py`'s LR-multiplier/Muon-momentum schedule shapes → `modelcore.optim.schedules`
-  (the param-group mutation itself is `ModelManager.apply_schedule`, since it touches the
-  optimizer's own on-disk format). Scaling-law horizon derivation (`derive_training_plan`/
-  `TrainingPlan`/`B_REF`) lives in `modelcore.scaling` too, but tinylab no longer calls it at all —
-  see "No derivation rules, not just no depth dial" below.
-- `checkpoints.py`'s `meta.json` merge and `model_<step>.pt` step scan → `modelcore.store`'s
-  `FileSystemStore.update_meta`/`last_step`.
-- `engine.py`'s tool-use decode loop (`RowState`, the forced-token deque, the tool start/end state
-  machine) → `modelcore.generate.generate_with_tools`/`collect_batch`, driven by a `ToolSpec` whose
-  `run=` is `Engine._run_calculator` — `use_calculator` itself (the `eval()` sandbox) stays here,
-  it's the one thing that's actually this repo's own.
-- `ops/train.py`'s dataset-open validation → `DataManager.open(..., expect_sequence_len=,
-  expect_fingerprint=)`, raising `datacore.DatasetMismatch`.
-- `ops/prepare.py`'s `TaskMixtureTokenSource` → `datacore.ExampleTokenSource(mixture, render=...,
-  name=...)`; its `_Truncated` wrapper is gone entirely -- `datacore.ExampleMixture`'s own `stop=`
-  kwarg already clamps to the true length.
-- `ops/bench.py`'s chat-task-name → task-class dict → `benchcore.build_chat_tasks`; its CORE-suite
-  load-then-score → `BenchManager.core_suite`.
+- device/DDP/seed bring-up (`compute_init`/`compute_cleanup`/`autodetect_device_type`) →
+  `modelcore.runtime`;
+- the LR-multiplier/Muon-momentum schedule shapes → `modelcore.optim.schedules` (the param-group
+  mutation itself is `ModelManager.apply_schedule`, since it touches the optimizer's own on-disk
+  format); scaling-law horizon derivation (`derive_training_plan`) → `modelcore.scaling`, read only by
+  the `info` report;
+- the `meta.json` merge and `model_<step>.pt` step scan → `modelcore.store`;
+- the tool-use decode loop (`RowState`, the forced-token deque, the tool state machine) →
+  `modelcore.generate.generate_with_tools`/`collect_batch`, driven by a `ToolSpec` whose `run=` is
+  `Engine._run_calculator` (the `eval()` sandbox stays here);
+- dataset-open validation → `DataManager.open(..., expect_sequence_len=, expect_fingerprint=)`;
+- the mixture-to-token-source glue → `datacore.ExampleTokenSource`; capping a mixture →
+  `ExampleMixture(stop=)`;
+- the chat-task registry → `benchcore.build_chat_tasks`; the CORE load-then-score →
+  `BenchManager.core_suite`.
 
-What's left in each of these files is what's actually specific to tinylab: naming/tag policy,
-job-file key handling, the cosine weight-decay schedule (no modelcore equivalent), and the
-mixture/corpus recipes themselves.
+What's left in tinylab is what is specific to a host: naming/tag policy, job-file key handling, and
+the mixture/corpus recipes.

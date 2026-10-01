@@ -122,3 +122,20 @@ def test_main_dispatches_info(capsys):
     from tinylab.__main__ import main
     assert main(["info", TINY_GPT_CONFIG, "--json"]) == 0
     assert "params" in json.loads(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("fixture,expected", [
+    ("gpt_tiny.json", ["attention"]),
+    ("hybrid_conv_tiny.json", None),  # filled in below from the fixture's own blocks
+])
+def test_mixer_types_come_from_the_tree_not_the_preset_label(fixture, expected):
+    path = os.path.join(os.path.dirname(TINY_GPT_CONFIG), fixture)
+    with open(path) as f:
+        raw = json.load(f)
+    config = ModelConfig.from_dict(raw)
+    types = info.mixer_types(config)
+    if expected is None:
+        assert len(types) > 1 and "attention" in types  # a hybrid reports every mixer it contains
+    else:
+        assert types == expected
+    assert info.stats_block(ModelManager(), config)["mixers"] == types

@@ -1,6 +1,6 @@
 {
   "format": "modelcore.v2",
-  "_comment": "A 2-layer tree at sequence_len 32 for the slow tests (see tests/test_smoke.py); dumped via nanochat's scripts/model_info.py --arch gpt --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768 --dump-config. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
+  "_comment": "A 2-layer tree at sequence_len 32 for the slow tests (see tests/test_smoke.py); generated with llmllab/tools/make_config.py --arch gpt --depth 2 --aspect-ratio 32 --head-dim 16 --max-seq-len 32 --vocab-size 32768. window -1 is full attention (sequence_len is only the training maximum); a positive window is a sliding window.",
   "sequence_len": 32,
   "vocab_size": 32768,
   "n_embd": 64,

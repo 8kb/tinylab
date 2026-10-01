@@ -7,7 +7,9 @@ with it. Every task is described in one JSON file instead of command-line flags.
 It's built on three components, each its own repo: [`modelcore`](https://github.com/8kb/modelcore)
 (models), [`datacore`](https://github.com/8kb/datacore) (data), and
 [`benchcore`](https://github.com/8kb/benchcore) (evaluation). Their own docs cover what they are and
-where they came from; this page covers using tinylab.
+where they came from; this page covers using tinylab. The whole family descends from
+[karpathy/nanochat](https://github.com/karpathy/nanochat) via our fork `8kb/nanochat` (archived);
+see [llmllab/AGENTS.md](../llmllab/AGENTS.md) for the lineage and the family's principles.
 
 ## Install
 
@@ -92,6 +94,7 @@ key, its meaning, and its default** — this example only shows a handful.
 | `prepare` | Tokenizes and packs a corpus into a dataset. `"kind": "base"` downloads ClimbMix shards; `"kind": "sft"` builds a SmolTalk + MMLU + GSM8K conversation mixture. |
 | `train` | One training loop for both `"kind": "base"` (pretrain from scratch) and `"kind": "sft"` (fine-tune a `source_tag`'d base checkpoint). `"save_every": N` checkpoints periodically, not just at the end. |
 | `bench` | Scores a checkpoint: `"suite": "core"` (DCLM's CORE benchmark) or `"suite": "chat"` (ARC, MMLU, GSM8K, HumanEval, plus the combined ChatCORE metric). |
+| `rl` | Reinforcement learning on GSM8K, starting from an `"sft"` checkpoint (REINFORCE-style, rewards from the task's own answer check). Writes a checkpoint like `train` does. |
 | `tokenizer` | Trains a fresh BPE vocab and writes it to the tokenizer it names (`"output"`, else the run's `"tokenizer"`, else `default`) under `<base_dir>/tokenizers/`. Most job files never need this — tinylab ships a committed default vocab; if used, it has to come before any step that loads that same tokenizer. |
 
 ## Chatting
@@ -103,8 +106,8 @@ instead of a REPL — useful for scripting or a quick sanity check.
 ## Tests
 
 ```bash
-uv run pytest -q                 # everything: a couple of seconds, including one real (tiny) training/generation run
-uv run pytest -q -m "not slow"   # skip that one real run: well under a second
+uv run pytest -q                 # everything: ~40 seconds (a cold torch.compile cache adds ~30 on the first run)
+uv run pytest -q -m "not slow"   # skip the real (tiny) training/generation runs: ~3 seconds
 ```
 
 ## More

@@ -1,6 +1,6 @@
 """
 The fixed texts the `bench` op's suite="tokenizer" measures compression on, and the prompts of
-suite="sample". Ported from nanochat's scripts/tok_eval.py and scripts/base_eval.py. The Korean
+suite="sample". Ported from our nanochat fork's scripts/tok_eval.py and scripts/base_eval.py. The Korean
 sample is stored with \\u escapes so this file stays ASCII-clean of non-Latin scripts (the repo's
 English-only rule); the rest is as it was.
 """

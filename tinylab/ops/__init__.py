@@ -154,7 +154,7 @@ class Context:
 #
 # "tokenizer" is different from the other four: it's still read off the first resolved step as the
 # *run's default* (job.run_file's Context(tokenizer_spec=...), used by ctx.tokenizer/tokenizer_name
-# and by "chat"), but unlike "device" it is NOT one-per-run -- prepare/train/bench each resolve
+# and by "chat"), but unlike "device" it is NOT one-per-run -- prepare/train/bench/rl each resolve
 # their OWN step's "tokenizer" key via ctx.tokenizer_for(cfg.get("tokenizer")), falling back to the
 # run default only when a step doesn't set one. A job training two differently-vocabbed models sets
 # "tokenizer" per relevant step rather than in "defaults" -- see docs/job-file.md.

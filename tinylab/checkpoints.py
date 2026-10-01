@@ -1,6 +1,6 @@
 """
-Checkpoint naming policy: which directory, which step, which tag. Ported from nanochat's
-nanochat/checkpoint_manager.py -- the actual model/optimizer artifact format belongs to modelcore
+Checkpoint naming policy: which directory, which step, which tag. Ported from our nanochat fork's
+checkpoint_manager.py -- the actual model/optimizer artifact format belongs to modelcore
 (modelcore.manager.ModelManager), this module hands it a modelcore.store.FileSystemStore over the
 right directory+step. See docs/architecture.md's "On-disk layout" for meta.json's full field list.
 
@@ -191,8 +191,7 @@ def build_model(checkpoint_dir, step, device, phase, config_override=None, token
 
 def find_last_step(checkpoint_dir):
     """The highest step number among checkpoint_dir's model_<step>.pt files. Raises
-    FileNotFoundError if there aren't any. Naming mechanics moved to modelcore.store.last_step --
-    nanochat carried an identical copy."""
+    FileNotFoundError if there aren't any (the scan itself is modelcore.store.last_step)."""
     return _last_step(checkpoint_dir)
 
 
@@ -226,7 +225,7 @@ def load_model(model_tag, device, phase, step=None, config_override=None, tokeni
 def load_optimizer_state(model_tag, step, device, rank, remote=None):
     """This rank's optimizer shard from another tag's checkpoint, without re-loading its model --
     what a kind="sft" step's momentum warm-start (tinylab.ops.train) needs from its own
-    "source_tag". Mirrors nanochat's checkpoint_manager.load_optimizer_state, minus the
+    "source_tag". Mirrors our nanochat fork's checkpoint_manager.load_optimizer_state, minus the
     base/sft/rl directory-name mapping tinylab's flat tag namespace doesn't have -- resolve_
     checkpoint_dir(model_tag) is already the whole address. Returns None if this shard was never
     saved (e.g. an older checkpoint, or optimizer state genuinely absent) -- the caller decides

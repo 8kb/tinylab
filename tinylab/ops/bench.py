@@ -3,7 +3,7 @@ The `bench` op: measure a checkpoint (or a tokenizer) with one of six suites, se
 "core" (DCLM CORE), "chat" (ARC/MMLU/GSM8K/HumanEval via benchcore), "bpb" (bits per byte on a
 prepared dataset's train and val splits), "sample" (fixed-prompt completions), "infer" (CUDA
 latency/throughput/MBU sweep) and "tokenizer" (compression ratio; needs no model). Ported from
-nanochat's scripts/base_eval.py, chat_eval.py, infer_bench.py and tok_eval.py (see
+our nanochat fork's scripts/base_eval.py, chat_eval.py, infer_bench.py and tok_eval.py (see
 llmllab/docs/history.md) -- see docs/architecture.md for the Model/Generator adapter split,
 docs/job-file.md for every cfg key this module reads.
 """

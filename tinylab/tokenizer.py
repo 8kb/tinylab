@@ -1,9 +1,9 @@
 """
-BPE tokenizer, ported from nanochat's nanochat/tokenizer.py so tinylab produces identical token
-ids without depending on nanochat itself -- see AGENTS.md for why it can't be a real dependency.
+BPE tokenizer, ported from our nanochat fork's tokenizer.py (archived) so tinylab produces identical
+token ids without depending on it -- see AGENTS.md.
 tinylab ships a committed default vocab (default_tokenizer/), so most job files never need to
 train their own -- but tinylab.ops.tokenizer's `tokenizer` op can, via train_from_iterator/save
-below (rustbpe + tiktoken, same as nanochat's own scripts/tok_train.py).
+below (rustbpe + tiktoken, same as our nanochat fork's own scripts/tok_train.py).
 """
 import copy
 import hashlib
@@ -20,9 +20,9 @@ import tiktoken
 TOKENIZERS_DIR = "tokenizers"
 DEFAULT_TOKENIZER_NAME = "default"
 
-# Documents the special tokens baked into default_tokenizer/tokenizer.pkl -- not read at runtime
-# (encode_special looks them up by string literal against the loaded tiktoken.Encoding directly),
-# but useful as a single place a reader can see the full set without grepping.
+# The special tokens baked into default_tokenizer/tokenizer.pkl, in id order. train_from_iterator
+# appends exactly this list after the ordinary vocab, so a retrained tokenizer gets the same set;
+# encode_special resolves a name against whatever the loaded tokenizer actually carries.
 SPECIAL_TOKENS = [
     # every document begins with the Beginning of Sequence (BOS) token that delimits documents
     "<|bos|>",
@@ -42,10 +42,10 @@ DEFAULT_MAX_TOKENS_PER_CONVERSATION = 2048
 
 # tiktoken's own splitting regex, used only by train_from_iterator (a trained vocab's mergeable
 # ranks bake in whatever pattern trained them; a *loaded* tokenizer's pat_str is already fixed).
-# Deviates from GPT-4 in using \p{N}{1,2} instead of \p{N}{1,3} -- nanochat's own comment: "I
-# didn't want to 'waste' too many tokens on numbers for smaller vocab sizes. I verified that 2 is
-# the sweet spot for vocab size of 32K." Byte-identical to nanochat's own SPLIT_PATTERN, so a
-# tokenizer retrained here on the same corpus reproduces nanochat's own token ids exactly.
+# Deviates from GPT-4 in using \p{N}{1,2} instead of \p{N}{1,3} -- Karpathy's comment in upstream
+# nanochat: "I didn't want to 'waste' too many tokens on numbers for smaller vocab sizes. I verified
+# that 2 is the sweet spot for vocab size of 32K." Byte-identical to upstream's SPLIT_PATTERN, so a
+# tokenizer retrained here on the same corpus reproduces upstream's token ids exactly.
 SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
 
@@ -68,8 +68,8 @@ class RustBPETokenizer:
 
     @classmethod
     def train_from_iterator(cls, text_iterator, vocab_size):
-        """Trains a fresh vocab on text_iterator's documents -- ported from nanochat's
-        nanochat/tokenizer.py's classmethod of the same name (rustbpe does the actual BPE merges;
+        """Trains a fresh vocab on text_iterator's documents -- ported from our nanochat fork's
+        tokenizer.py's classmethod of the same name (rustbpe does the actual BPE merges;
         this wraps the result in a tiktoken.Encoding for fast inference). SPECIAL_TOKENS are never
         trained -- rustbpe only ever sees vocab_size - len(SPECIAL_TOKENS) ordinary tokens, and the
         specials are appended afterward in their fixed list order, so their ids are always the
@@ -92,7 +92,7 @@ class RustBPETokenizer:
 
     def save(self, tokenizer_dir):
         """The from_directory-loadable half of train_from_iterator's output -- only self.enc (the
-        tiktoken.Encoding) is pickled, same as nanochat's own save(). Doesn't write token_bytes.pt
+        tiktoken.Encoding) is pickled, same as our nanochat fork's own save(). Doesn't write token_bytes.pt
         -- that's tinylab.ops.tokenizer's job, since it's derived from this tokenizer via
         token_byte_lengths(), not part of the tokenizer's own on-disk identity."""
         os.makedirs(tokenizer_dir, exist_ok=True)
@@ -269,9 +269,9 @@ class RustBPETokenizer:
 
 def _bundled_default_tokenizer_dir():
     """The path to tinylab's own committed default_tokenizer/ (tokenizer.pkl + token_bytes.pt),
-    ported byte-for-byte from nanochat/nanochat/default_tokenizer/ -- so a fresh tinylab checkout
+    ported byte-for-byte from our nanochat fork's default_tokenizer/ -- so a fresh tinylab checkout
     can train/chat immediately with no tok_train step, and produces token ids identical to
-    nanochat's own default tokenizer."""
+    our nanochat fork's own default tokenizer."""
     return str(resources.files("tinylab") / "default_tokenizer")
 
 
@@ -295,7 +295,7 @@ def resolve_tokenizer_dir(spec=None, *, base_dir=None):
 def get_tokenizer(base_dir=None, tokenizer=None, remote=None):
     """Loads the tokenizer `tokenizer` names (see resolve_tokenizer_dir; None -> the default).
     Only the default one is ever materialized for you -- tinylab's bundled vocab is copied into
-    <base_dir>/tokenizers/default/ on first use (mirrors nanochat's convention of a repo-committed
+    <base_dir>/tokenizers/default/ on first use (mirrors our nanochat fork's convention of a repo-committed
     tokenizer, but does the copy in Python instead of requiring a shell step -- tinylab has no
     shell runners). Any other name that doesn't exist raises: silently handing back the default
     vocab under a different name would pass every fingerprint check, since they would be

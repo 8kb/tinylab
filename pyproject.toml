@@ -32,7 +32,7 @@ dev = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
-# tinylab is a virtual uv project (never built/installed, like nanochat) -- this is what puts the
+# tinylab is a virtual uv project (never built/installed) -- this is what puts the
 # repo root on sys.path so `import tinylab` resolves under `pytest`, matching what `python -m
 # tinylab` already gets for free from -m's own CWD insertion.
 pythonpath = ["."]
@@ -41,15 +41,15 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 
-# target torch to cuda 12.8 or CPU -- same pattern nanochat uses
+# target torch to cuda 12.8 or CPU -- same pattern our nanochat fork used
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "gpu" },
 ]
-modelcore = { git = "https://github.com/8kb/modelcore", tag = "v0.12.0" }
-datacore = { git = "https://github.com/8kb/datacore", tag = "v0.4.0" }
-benchcore = { git = "https://github.com/8kb/benchcore", tag = "v0.4.0" }
+modelcore = { git = "https://github.com/8kb/modelcore", tag = "v0.13.0" }
+datacore = { git = "https://github.com/8kb/datacore", tag = "v0.5.0" }
+benchcore = { git = "https://github.com/8kb/benchcore", tag = "v0.5.0" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
